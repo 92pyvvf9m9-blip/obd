@@ -202,7 +202,7 @@ const EXTRA = [
  {id:'5C', key:'oilt',   label:'油温', unit:'℃', f:a=>a-40, dp:0},
  {id:'5E', key:'frate',  label:'燃料流量', unit:'L/h', f:(a,b)=>(a*256+b)/20, dp:2},
 ];
-const FAST = new Set(['0C','0D','0B','11','06','0E','45','4C','49']);   // 毎回読む（速く変わる）項目
+const FAST = new Set(['0C','0D','0B','11','06','0E','04','45','4C','49']);   // 毎回読む（速く変わる）項目
 let ALL = [...PIDS, VOLT];
 function addExtras(ids){
  for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
@@ -729,6 +729,9 @@ function idleStats(){
   L.push(`回転数: 最小${s.min.toFixed(0)} / 平均${s.avg.toFixed(0)} / 最大${s.max.toFixed(0)} rpm、ばらつき(標準偏差) ${s.sd.toFixed(0)}rpm（${idle.length}件）`);
   L.push(`吸気管圧力 平均${avg(idle,'map')}kPa / 負荷 平均${avg(idle,'load')}% / 点火時期 平均${avg(idle,'timing')}°`);
   L.push(`燃調 アイドリング時: 短期${avg(idle,'stft')}% 長期${avg(idle,'ltft')}% ／ 走行時: 短期${avg(drive,'stft')}% 長期${avg(drive,'ltft')}%`);
+  // P/N（負担なし）とみなせるアイドリングだけで、スロットル汚れの目安を出す
+  const pn = idle.filter(r=>r.map!=null && r.map<=44 && r.thrCmd!=null);
+  if(pn.length>=10) L.push(`【スロットル汚れの目安】P/Nアイドリング時のスロットル指令: 平均${avg(pn,'thrCmd')}%（相対開度${avg(pn,'relthr')}% / 吸気管圧力${avg(pn,'map')}kPa / ${avg(pn,'rpm')}rpm、${pn.length}件）※基準 2026/11/12: 3.9〜4.7%。6%を超えてきたら清掃のサイン`);
  }
  return L;
 }
