@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>パレットSW OBD2モニター</title>
+<style>
+:root{--bg:#0b0d10;--panel:#14181d;--line:#232a32;--text:#e8edf2;--dim:#8894a0;--accent:#ffb020;--ok:#3ddc97;--bad:#ff5a5a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"Hiragino Sans",sans-serif;
+ padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 24px)}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+h1{font-size:15px;letter-spacing:.15em;margin:0;color:var(--accent)}
+.pill{font-size:12px;padding:4px 10px;border-radius:99px;background:var(--line);color:var(--dim)}
+.pill.on{background:rgba(61,220,151,.15);color:var(--ok)}
+.pill.err{background:rgba(255,90,90,.15);color:var(--bad)}
+.warn{background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.4);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.6;margin-bottom:12px}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:13px 6px;font-size:14px;font-weight:600}
+button.primary{background:var(--accent);color:#111;border:none}
+button:disabled{opacity:.35}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tile.big{grid-column:span 1}
+.lbl{font-size:11px;color:var(--dim)}
+.val{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.val small{font-size:12px;color:var(--dim);font-weight:500;margin-left:3px}
+.bar{height:4px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.tile.na{opacity:.35}
+#dtcOut{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;font-size:14px;margin-top:4px;line-height:1.7}
+#dtcOut:empty{display:none}
+.code{display:inline-block;background:rgba(255,90,90,.15);color:var(--bad);padding:2px 8px;border-radius:6px;margin:2px 4px 2px 0;font-weight:700}
+details{margin-top:14px;font-size:12px;color:var(--dim)}
+pre{white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;background:#07090b;padding:8px;border-radius:8px}
+.note{font-size:11px;color:var(--dim);line-height:1.6;margin-top:14px}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);background:var(--ok);color:#06140d;padding:10px 16px;border-radius:99px;font-weight:700;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+h2.sec{font-size:14px;color:var(--accent);margin:22px 0 4px;letter-spacing:.05em}
+.hint{font-size:12px;color:var(--dim);line-height:1.6;margin:4px 0}
+.row{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px;color:var(--dim)}
+.row label{width:34px;flex:none}
+select,input{flex:1;min-width:0;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px 10px;font-size:16px;font-family:inherit}
+#rangeFrom,#rangeTo{font-family:ui-monospace,monospace;text-transform:uppercase}
+#customCmd{font-family:ui-monospace,monospace}
+.row button{flex:none;padding:11px 16px}
+#extOut{color:var(--text);font-size:12px;max-height:320px;min-height:40px}
+#meta{font-size:12px;color:var(--dim);margin:2px 0 8px}
+</style>
+</head>
+<body>
+<header><h1>PALETTE SW · OBD2</h1><span id="status" class="pill">未接続</span></header>
+
+<div id="warn" class="warn" hidden>
+このブラウザはBluetoothに対応していません。<br>
+iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこのページを開いてください（Safari・Chromeでは接続できません）。<br>
+「デモ」ボタンで画面の動きだけは確認できます。
+</div>
+
+<div class="btns">
+ <button id="btnConnect" class="primary">接続</button>
+ <button id="btnDemo">デモ</button>
+ <button id="btnStop" disabled>停止</button>
+</div>
+<div id="meta"></div>
+
+<div class="grid" id="grid"></div>
+
+<h2 class="sec">メーター（ページで計算）</h2>
+<div class="grid" id="meterGrid">
+ <div class="tile"><div class="lbl">ODO</div><div class="val"><span id="m_odo">--</span><small>km</small></div></div>
+ <div class="tile"><div class="lbl">瞬間燃費</div><div class="val"><span id="m_inst">--</span><small>km/L</small></div></div>
+ <div class="tile"><div class="lbl">トリップA</div><div class="val"><span id="m_ta">0.0</span><small>km</small></div><div class="lbl">平均 <span id="m_fa">--</span> km/L</div></div>
+ <div class="tile"><div class="lbl">トリップB（給油ごと）</div><div class="val"><span id="m_tb">0.0</span><small>km</small></div><div class="lbl">平均 <span id="m_fb">--</span> km/L・<span id="m_lb">0.00</span> L</div></div>
+</div>
+<div class="btns">
+ <button id="btnRstA">Aリセット</button>
+ <button id="btnRstB">Bリセット</button>
+ <button id="btnMeterOpt">設定</button>
+</div>
+<div id="meterOpt" hidden>
+ <div class="row"><label>ODO</label><input id="odoInput" type="number" inputmode="decimal" placeholder="メーターのODOを入力（km）"><button id="btnOdo">設定</button></div>
+ <div class="row"><label>給油</label><input id="fuelInput" type="number" inputmode="decimal" placeholder="満タン給油した量（L）"><button id="btnFuel">補正</button></div>
+ <p class="hint">・ODO：メーターの今の数字を1回入れると、あとはページが走った分を足していきます（ページで記録していない間の走行は入りません）。<br>
+ ・燃費は吸気管圧力・回転数・吸気温から計算した<b>推定値</b>です。満タン給油のたびに「給油した量」を入れて「補正」→ Bリセット、を繰り返すと、だんだん正確になります。<br>
+ ・補正係数：<span id="calShow">1.00</span></p>
+</div>
+
+<div class="hint" id="drivingNote">🚗 走行中も記録できます。出発前に接続して、iPhoneは<b>画面をつけたまま</b>（設定→画面表示と明るさ→自動ロック「なし」）・<b>充電しながら</b>ホルダーに固定してください。Bluefyを閉じたり画面が消えると記録が止まります。途中で切れても、30分以内に再接続すれば同じ記録の続きになります。</div>
+<div class="btns">
+ <button id="btnDtc" disabled>故障コード</button>
+ <button id="btnCopy" class="primary">Claude用コピー</button>
+ <button id="btnCsv">CSVコピー</button>
+</div>
+<div class="btns">
+ <button id="btnClearLog">記録を消す</button>
+</div>
+<div id="dtcOut"></div>
+
+<h2 class="sec">拡張：スズキ独自データ探索</h2>
+<p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
+<button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
+<div class="btns">
+ <button class="ext" id="btnKline">7番ピン機器を探す</button>
+ <button class="ext" id="btnKlineDeep">7番ピン 全部探す</button>
+ <button class="ext" id="btnKlineDummy" style="visibility:hidden"></button>
+</div>
+<div class="btns">
+ <button class="ext" id="btnEcu">ECU検索</button>
+ <button class="ext" id="btnEcuDeep">深くECU検索</button>
+ <button class="ext" id="btnInfo">車両情報</button>
+</div>
+<div class="btns">
+ <button class="ext" id="btnAllDtc">全ECU故障コード</button>
+ <button class="ext" id="btnScan">データ探索</button>
+ <button class="ext" id="btnReread">再読取で比較</button>
+</div>
+<div class="row">
+ <label>対象</label><select id="scanTarget"><option value="7E0|7E8">エンジン (7E0)</option><option value="7E1|7E9">AT（ミッション） (7E1)</option></select>
+</div>
+<div class="row">
+ <label>範囲</label>
+ <select id="scanPreset">
+  <option value="21|00|FF">旧方式（KWP） 21 00〜FF ★おすすめ</option>
+  <option value="22|F180|F1FF">識別情報 22 F180〜F1FF</option>
+  <option value="22|1000|10FF">22 1000〜10FF</option>
+  <option value="22|1100|11FF">22 1100〜11FF</option>
+  <option value="22|2000|20FF">22 2000〜20FF</option>
+  <option value="22|0000|00FF">22 0000〜00FF</option>
+  <option value="custom">自分で指定</option>
+ </select>
+</div>
+<div class="row" id="customRange" hidden>
+ <select id="scanMode"><option value="22">22</option><option value="21">21</option></select>
+ <input id="rangeFrom" value="1000" maxlength="4"> 〜 <input id="rangeTo" value="10FF" maxlength="4">
+</div>
+<div class="row">
+ <input id="customCmd" placeholder="手動コマンド 例: ATSH7E0;22F190" autocapitalize="characters" autocomplete="off">
+ <button class="ext" id="btnSend">送信</button>
+</div>
+<div id="scanProg" class="hint"></div>
+<pre id="extOut"></pre>
+<div class="btns">
+ <button id="btnAbort" disabled>中止</button>
+ <button id="btnExtCopy" class="primary">探索結果コピー</button>
+ <button id="btnExtClear">表示クリア</button>
+</div>
+
+<details><summary>通信ログ（うまく動かない時に）</summary><pre id="log"></pre></details>
+
+<p class="note">
+・運転中は画面を操作しないでください。走行データは同乗者が操作するか、停車後に確認を。<br>
+・「Claude用コピー」を押して、Claudeのチャットに貼り付けると、データを読んで解説できます。<br>
+・故障コードの読取のみ行います（消去はしません）。
+</p>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+// ===== 表示する項目（OBD2 標準PID / モード01） =====
+const PIDS = [
+ {id:'0C', key:'rpm',      label:'エンジン回転数', unit:'rpm',  f:(a,b)=>(a*256+b)/4, dp:0, max:7000},
+ {id:'0D', key:'speed',    label:'車速',          unit:'km/h', f:a=>a,             dp:0, max:140},
+ {id:'05', key:'coolant',  label:'水温',          unit:'℃',   f:a=>a-40,          dp:0, max:120},
+ {id:'0F', key:'iat',      label:'吸気温',        unit:'℃',   f:a=>a-40,          dp:0, max:80},
+ {id:'04', key:'load',     label:'エンジン負荷',   unit:'%',    f:a=>a*100/255,     dp:0, max:100},
+ {id:'11', key:'throttle', label:'スロットル開度', unit:'%',    f:a=>a*100/255,     dp:0, max:100},
+ {id:'0B', key:'map',      label:'吸気管圧力',     unit:'kPa',  f:a=>a,             dp:0, max:200},
+ {id:'06', key:'stft',     label:'燃調 短期',     unit:'%',    f:a=>(a-128)*100/128, dp:1},
+ {id:'07', key:'ltft',     label:'燃調 長期',     unit:'%',    f:a=>(a-128)*100/128, dp:1},
+ {id:'0E', key:'timing',   label:'点火時期',       unit:'°',    f:a=>a/2-64,        dp:1},
+ {id:'15', key:'o2',       label:'O2センサー電圧', unit:'V',    f:a=>a/200,         dp:2, max:1},
+ {id:'1F', key:'runtime',  label:'始動後の時間',   unit:'秒',   f:(a,b)=>a*256+b,   dp:0},
+];
+const VOLT = {key:'volt', label:'バッテリー電圧', unit:'V', dp:1, max:15};
+const ALL = [...PIDS, VOLT];
+
+// よく使われるBLE版ELM327のサービスUUID
+const SERVICES = [
+ '0000fff0-0000-1000-8000-00805f9b34fb',
+ '0000ffe0-0000-1000-8000-00805f9b34fb',
+ '000018f0-0000-1000-8000-00805f9b34fb',
+ 'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+ '0000ae30-0000-1000-8000-00805f9b34fb',
+ '0000ffb0-0000-1000-8000-00805f9b34fb',
+];
+
+const $ = id => document.getElementById(id);
+let transport = null, running = false, isCAN = true, protocol = '', protoNum = '0', connected = false;
+let supported = new Set(PIDS.map(p=>p.id));
+let samples = [], latest = {}, lastDtc = null, startTime = null;
+
+// ===== 画面 =====
+function buildGrid(){
+ $('grid').innerHTML = ALL.map(p=>`
+  <div class="tile" id="t_${p.key}">
+   <div class="lbl">${p.label}</div>
+   <div class="val"><span id="v_${p.key}">--</span><small>${p.unit}</small></div>
+   ${p.max?`<div class="bar"><i id="b_${p.key}"></i></div>`:''}
+  </div>`).join('');
+}
+function show(p, v){
+ latest[p.key] = v;
+ $('v_'+p.key).textContent = v==null ? '--' : v.toFixed(p.dp);
+ if(p.max && $('b_'+p.key)) $('b_'+p.key).style.width = v==null?0:Math.max(0,Math.min(100,v/p.max*100))+'%';
+}
+function setStatus(t, cls){ const s=$('status'); s.textContent=t; s.className='pill '+(cls||''); }
+function log(t){ const l=$('log'); l.textContent += t+'\n'; if(l.textContent.length>20000) l.textContent=l.textContent.slice(-15000); l.scrollTop=l.scrollHeight; }
+function toast(t){ const e=$('toast'); e.textContent=t; e.classList.add('show'); setTimeout(()=>e.classList.remove('show'),1800); }
+
+// ===== ELM327 との通信 =====
+let rxBuf = '', pending = null, chain = Promise.resolve();
+// エコー（送った命令がそのまま先頭に返ってくる）で、どの命令への返事かを照合する。
+// 遅れて届いた前の命令の返事は捨てるので、命令と返事がずれない。
+let echoMode = false;
+function onData(text){
+ rxBuf += text;
+ let i;
+ while((i = rxBuf.indexOf('>')) >= 0){
+  const seg = rxBuf.slice(0,i); rxBuf = rxBuf.slice(i+1);
+  if(!pending){ if(seg.trim()) log('（宛先のない返事を破棄）'+seg.replace(/[\r\n]+/g,' ').trim()); continue; }
+  let resp = seg;
+  if(echoMode){
+   const ls = seg.split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+   const first = (ls[0]||'').replace(/\s/g,'').toUpperCase();
+   if(first !== pending.cmd){ log('（ずれた返事を破棄）'+seg.replace(/[\r\n]+/g,' ').trim()); continue; }
+   resp = ls.slice(1).join('\r');
+  }
+  const p = pending; pending = null; clearTimeout(p.timer); p.resolve(resp);
+ }
+}
+function cmd(c, timeout=4000){
+ const run = () => new Promise(resolve=>{
+  rxBuf = '';
+  pending = {resolve, cmd:c.toUpperCase().replace(/\s/g,''), timer:setTimeout(()=>{ pending=null; resolve('TIMEOUT'); }, timeout)};
+  log('→ '+c);
+  transport.write(c+'\r').catch(e=>{ log('送信エラー '+e); });
+ }).then(r=>{ log('← '+r.replace(/[\r\n]+/g,' ').trim()); return r; });
+ chain = chain.then(run, run);
+ return chain;
+}
+// 応答の掃除（複数フレームの "0:" などを除去）
+function lines(r){
+ return r.split(/[\r\n]+/).map(l=>l.trim().replace(/\s+/g,'').toUpperCase())
+  .filter(l=>l && !/^(SEARCHING|BUSINIT|OK|\.\.\.)/.test(l) && !/^[0-9A-F]{3}$/.test(l))
+  .map(l=>l.replace(/^[0-9A-F]:/,''));
+}
+function parsePid(r, pid){
+ for(const l of lines(r)){
+  const i = l.indexOf('41'+pid);
+  if(i>=0){
+   const hex = l.slice(i+4); const b=[];
+   for(let k=0;k+2<=hex.length;k+=2) b.push(parseInt(hex.slice(k,k+2),16));
+   if(b.length && !b.some(isNaN)) return b;
+  }
+ }
+ return null;
+}
+function decodeDtc(c){
+ const n = parseInt(c[0],16);
+ return 'PCBU'[n>>2] + (n&3) + c.slice(1);
+}
+function parseDtc(r, pre='43'){
+ const ls = lines(r);
+ if(ls.some(l=>l.includes('NODATA'))) return [];
+ let body = '';
+ if(isCAN){
+  const s = ls.join(''); const i = s.indexOf(pre);
+  if(i<0) return null;
+  body = s.slice(i+4); // 応答コード + 件数バイト を飛ばす
+ } else {
+  for(const l of ls) if(l.startsWith(pre)) body += l.slice(2);
+  if(!body) return null;
+ }
+ const out = [];
+ for(let k=0;k+4<=body.length;k+=4){ const c=body.slice(k,k+4); if(c!=='0000' && /^[0-9A-F]{4}$/.test(c)) out.push(decodeDtc(c)); }
+ return [...new Set(out)];
+}
+
+// ===== Bluetooth (BLE) 接続 =====
+async function bleTransport(){
+ const device = await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
+ setStatus('接続中…');
+ const server = await device.gatt.connect();
+ let nChar=null, wChar=null;
+ for(const u of SERVICES){
+  let svc; try{ svc = await server.getPrimaryService(u); }catch(e){ continue; }
+  const chars = await svc.getCharacteristics();
+  const n = chars.find(c=>c.properties.notify||c.properties.indicate);
+  const w = chars.find(c=>c.properties.write||c.properties.writeWithoutResponse);
+  if(n && w){ nChar=n; wChar=w; log('サービス '+u); break; }
+ }
+ if(!nChar) throw new Error('OBD2用の通信口が見つかりません（Bluetooth Classic専用の機種の可能性）');
+ await nChar.startNotifications();
+ const dec = new TextDecoder();
+ nChar.addEventListener('characteristicvaluechanged', e=>onData(dec.decode(e.target.value)));
+ device.addEventListener('gattserverdisconnected', ()=>{ running=false; connected=false; abortExt=true; setStatus('切断されました','err'); updateButtons(false); setExtButtons(false); });
+ const enc = new TextEncoder();
+ return {
+  name: device.name || 'OBD2',
+  async write(s){
+   const data = enc.encode(s);
+   for(let i=0;i<data.length;i+=20){
+    const chunk = data.slice(i,i+20);
+    if(wChar.properties.writeWithoutResponse && wChar.writeValueWithoutResponse) await wChar.writeValueWithoutResponse(chunk);
+    else await wChar.writeValue(chunk);
+   }
+  },
+  close(){ try{ device.gatt.disconnect(); }catch(e){} }
+ };
+}
+
+// ===== デモ（車がなくても動作確認できる擬似ELM327） =====
+function demoTransport(){
+ const t0 = Date.now(); let hdr = '7DF', hon = false, echo = true;
+ const h =(v,n=1)=>Math.max(0,Math.round(v)).toString(16).toUpperCase().padStart(n*2,'0').slice(-n*2);
+ return {
+  name:'デモ',
+  async write(s){
+   const c = s.trim().toUpperCase(); const t=(Date.now()-t0)/1000;
+   const ec = echo ? c+'\r' : '';
+   if(c==='ATE0') echo=false; if(c==='ATE1'||c==='ATZ'||c==='ATWS') echo=true;
+   const rpm = 800 + 1400*(1+Math.sin(t/4)) + Math.random()*80;
+   const spd = Math.max(0, 30 + 25*Math.sin(t/4 - .5));
+   let r = '?';
+   if(c.startsWith('ATSH')) hdr = c.slice(4);
+   if(c==='ATH1') hon = true;
+   if(c==='ATH0' || c==='ATWS') { hon = false; hdr = '7DF'; }
+   const ecu = hdr==='7E0' ? '7E8' : hdr==='7E1' ? '7E9' : hdr==='7DF' ? '7E8' : null;
+   const fr = p => ecu ? ecu + h(p.length/2) + p : 'NO DATA';   // 単一フレーム（ヘッダ付）
+   if(hon && !c.startsWith('AT')){
+    if(hdr==='8128F1'){ r = c==='3E01' ? '82F1287E0124' : c==='1800FF00' ? '82F12858001B' : c==='1A80' ? '86F1285A80313233AB' : 'NO DATA'; setTimeout(()=>onData(ec+r+'\r\r>'), 30); return; }
+    if(/^81..F1$/.test(hdr)){ setTimeout(()=>onData(ec+'BUS INIT: ...ERROR\r\r>'), 30); return; }
+    if(c==='3E00') r = fr('7E00');
+    else if(c==='0100' && hdr==='7DF') r = '7E8064100BE3EB813\r7E906410098180001';
+    else if(c==='0904' && hdr==='7DF') r = '7E81014490401333348\r7E82137304B42313130\r7E8223030000000000';
+    else if(c==='1800FF00' && hdr==='7E0') r = fr('580101336A');
+    else if(c==='1081') r = fr(hdr==='7E1' ? '5081' : '7F1011');
+    else if(c==='1003') r = fr('7F1011');
+    else if(c==='1802FFFF' && hdr==='7E1') r = fr('58010700A0');
+    else if(c.startsWith('18')||c==='1902FF'||c==='13') r = fr('7F'+c.slice(0,2)+'12');
+    else if(hdr==='7E0' && c==='22F190') r = '7E81014'+'62F190'+'4D4B\r7E82132315331323334\r7E82235363700000000';
+    else if(hdr==='7E0' && c==='221001') r = fr('621001'+h(rpm/32));
+    else if(hdr==='7E0' && c==='221005') r = fr('621005'+h(Math.min(88,40+t*2)+40));
+    else if(hdr==='7E0' && c==='22100A') r = fr('62100A'+h(142));
+    else if(c.startsWith('22')) r = fr('7F2231');
+    else r = 'NO DATA';
+    setTimeout(()=>onData(ec+r+'\r\r>'), 30); return;
+   }
+   if(c.startsWith('AT')) r = c==='ATRV' ? (13.9+Math.random()*.4).toFixed(1)+'V' : c==='ATDPN' ? 'A6' : c==='ATZ' ? 'ELM327 v1.5' : 'OK';
+   else if(c==='0100') r = '4100BE3EB813';
+   else if(c==='010C') r = '410C'+h(rpm*4,2);
+   else if(c==='010D') r = '410D'+h(spd);
+   else if(c==='0105') r = '4105'+h(Math.min(88, 40+t*2)+40);
+   else if(c==='010F') r = '410F'+h(28+40);
+   else if(c==='0104') r = '4104'+h((20+rpm/80)*2.55);
+   else if(c==='0111') r = '4111'+h((14+Math.max(0,Math.sin(t/4))*30)*2.55);
+   else if(c==='010B') r = '410B'+h(35+rpm/60);
+   else if(c==='0106') r = '4106'+h(128+(Math.random()-.5)*8);
+   else if(c==='0107') r = '4107'+h(131);
+   else if(c==='03') r = '4301013300';
+   else if(c==='07') r = '47010171';
+   else if(c==='0A') r = '4A00';
+   else if(c==='0101') r = '41018107E500';
+   else if(c==='010E') r = '410E'+h(64*2+8+Math.random()*6);
+   else if(c==='0115') r = '4115'+h(20+Math.random()*150)+'FF';
+   else if(c==='011F') r = '411F'+h(t,2);
+   else if(c==='0121') r = '41210012';
+   else if(c==='014D') r = '414D002D';
+   else if(c==='0131') r = '41310C80';
+   else if(c==='014E') r = '414E0F00';
+   else if(c==='0130') r = '41301E';
+   else if(c==='020200') r = '4202000133';
+   else if(c==='020C00') r = '420C00'+h(2400*4,2);
+   else if(c==='020D00') r = '420D00'+h(52);
+   else if(c==='020500') r = '42050'+'0'+h(86+40);
+   else r = 'NO DATA';
+   setTimeout(()=>onData(ec+r+'\r\r>'), 40);
+  },
+  close(){}
+ };
+}
+
+// ===== 初期化と計測ループ =====
+async function initElm(){
+ await cmd('ATZ', 6000);
+ echoMode = false;
+ for(const c of ['ATE1','ATL0','ATS0','ATH0','ATAT1','ATSP0']) await cmd(c);
+ const ti = (await cmd('ATI')).split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+ echoMode = (ti[0]||'').replace(/\s/g,'').toUpperCase()==='ATI';
+ log('返事の照合: '+(echoMode?'ON':'OFF（アダプターがエコー非対応）'));
+ if(!echoMode){ await cmd('ATE0'); }
+ setStatus('車両と通信中…');
+ const r = await cmd('0100', 12000);
+ const b = parsePid(r,'00');
+ if(!b){ throw new Error('車から応答がありません。エンジン（またはACC）をONにしてください'); }
+ supported = new Set();
+ const mask = ((b[0]<<24)>>>0) + (b[1]<<16) + (b[2]<<8) + b[3];
+ for(let n=1;n<=32;n++) if(mask & (1<<(32-n))) supported.add(n.toString(16).toUpperCase().padStart(2,'0'));
+ PIDS.forEach(p=>{ if(!supported.has(p.id)) $('t_'+p.key).classList.add('na'); });
+ const dp = (await cmd('ATDPN')).replace(/[^0-9A-F]/gi,'').toUpperCase();
+ const num = dp.replace(/^A/,'');
+ protocol = dp; protoNum = num || '0'; isCAN = /^[6-9A-C]$/.test(num);
+ $('meta').textContent = `アダプター: ${transport.name} / 通信方式: ${num||'?'}${isCAN?'（CAN）':''}`;
+}
+async function loop(){
+ while(running){
+  const row = {time:new Date()};
+  for(const p of PIDS){
+   if(!running) break;
+   if(!supported.has(p.id)) continue;
+   const b = parsePid(await cmd('01'+p.id), p.id);
+   const v = b ? p.f(b[0], b[1]) : null;
+   show(p, v); row[p.key] = v;
+  }
+  if(!running) break;
+  const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
+  const vv = vr ? parseFloat(vr[1]) : null; show(VOLT, vv); row.volt = vv;
+  meterStep(row);
+  samples.push(row); if(samples.length>20000) samples.shift();
+  if(samples.length % 15 === 0) saveLog();
+  $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
+ }
+}
+async function start(kind){
+ try{
+  transport = kind==='demo' ? demoTransport() : await bleTransport();
+  const last = samples[samples.length-1];
+  if(!last || Date.now() - last.time > 30*60000){ samples=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
+  latest={};
+  buildGrid(); updateButtons(true); setStatus('初期化中…');
+  await initElm();
+  connected = true; setExtButtons(false);
+  running = true; setStatus(kind==='demo'?'デモ実行中':'接続中','on');
+  try{ await navigator.wakeLock?.request('screen'); }catch(e){}
+  loopPromise = loop();
+ }catch(e){
+  log('エラー: '+(e.message||e));
+  setStatus(e.name==='NotFoundError'?'キャンセル':'エラー','err');
+  if(e.name!=='NotFoundError') toast(e.message||'接続できませんでした');
+  stop();
+ }
+}
+function stop(){
+ if(samples.length) saveLog();
+ running=false; abortExt=true; connected=false; setExtButtons(false);
+ if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve('STOPPED'); }
+ if(transport) transport.close();
+ updateButtons(false);
+ if($('status').textContent.includes('中')) setStatus('停止');
+}
+function updateButtons(on){
+ $('btnConnect').disabled=on; $('btnDemo').disabled=on; $('btnStop').disabled=!on; $('btnDtc').disabled=!on;
+}
+function parseFF(r, pid){
+ const s = lines(r).join(''), i = s.indexOf('42'+pid+'00');
+ return i>=0 ? hexBytes(s.slice(i+6)) : null;
+}
+const HIST = [
+ ['21','警告灯が点いてからの走行距離', b=>(b[0]*256+b[1])+' km'],
+ ['4D','警告灯が点いている時間',       b=>(b[0]*256+b[1])+' 分'],
+ ['31','コード消去後の走行距離',       b=>(b[0]*256+b[1])+' km'],
+ ['4E','コード消去後の経過時間',       b=>(b[0]*256+b[1])+' 分'],
+ ['30','コード消去後の暖機回数',       b=>b[0]+' 回'],
+];
+const chips = c => c.map(x=>`<span class="code">${x}</span>`).join('');
+async function readDtc(){
+ $('btnDtc').disabled = true;
+ $('dtcOut').textContent = '読み取り中…（10〜20秒）';
+ const R = {};
+ R.stored    = parseDtc(await cmd('03', 8000), '43');   // 記録済み（確定）
+ R.pending   = parseDtc(await cmd('07', 8000), '47');   // 保留（1回だけ出た／確定前）
+ R.permanent = parseDtc(await cmd('0A', 8000), '4A');   // 永久（消しても残る記録）
+ const m = parsePid(await cmd('0101'), '01');
+ R.mil = m ? {on: !!(m[0]&0x80), count: m[0]&0x7F} : null;
+ R.hist = [];
+ for(const [pid,label,f] of HIST){ const b = parsePid(await cmd('01'+pid), pid); if(b && b.length>=1) R.hist.push(`${label}：${f(b)}`); }
+ // フリーズフレーム（故障が記録された瞬間の車の状態）
+ R.ff = null;
+ const ffd = parseFF(await cmd('020200', 6000), '02');
+ if(ffd && ffd.length>=2 && (ffd[0]|ffd[1])){
+  R.ff = {code: decodeDtc(hx(ffd[0])+hx(ffd[1])), vals: []};
+  for(const p of PIDS){
+   const b = parseFF(await cmd('02'+p.id+'00', 6000), p.id);
+   if(b && b.length) R.ff.vals.push(`${p.label} ${p.f(b[0],b[1]).toFixed(p.dp)}${p.unit}`);
+  }
+ }
+ lastDtc = R;
+ const sec = (title, list, none) => `<div><b>${title}</b>：${list==null ? '<span style="color:var(--dim)">非対応</span>' : list.length ? chips(list) : none}</div>`;
+ let h = '';
+ if(R.mil) h += `<div>エンジン警告灯：${R.mil.on ? '<span class="code">点灯</span>' : '消灯'}（記録 ${R.mil.count}件）</div>`;
+ h += sec('記録済み', R.stored, 'なし');
+ h += sec('保留（過去に1回出た等）', R.pending, 'なし');
+ h += sec('永久（消去しても残る）', R.permanent, 'なし');
+ if(R.ff) h += `<div><b>発生時の状態</b>（${R.ff.code}）：${R.ff.vals.join(' / ')||'-'}</div>`;
+ if(R.hist.length) h += `<div style="color:var(--dim)">${R.hist.join('<br>')}</div>`;
+ h += '<small style="color:var(--dim)">「Claude用コピー」で貼り付けると意味を調べられます</small>';
+ $('dtcOut').innerHTML = h;
+ $('btnDtc').disabled = !connected;
+}
+function dtcText(){
+ const R = lastDtc;
+ if(!R) return '故障コード: 未読取';
+ const j = l => l==null ? '非対応' : l.length ? l.join(', ') : 'なし';
+ const L = ['故障コード:'];
+ if(R.mil) L.push(`  警告灯: ${R.mil.on?'点灯':'消灯'}（記録${R.mil.count}件）`);
+ L.push(`  記録済み(03): ${j(R.stored)}`, `  保留(07): ${j(R.pending)}`, `  永久(0A): ${j(R.permanent)}`);
+ if(R.ff) L.push(`  発生時の状態(${R.ff.code}): ${R.ff.vals.join(' / ')}`);
+ for(const x of R.hist) L.push('  '+x);
+ return L.join('\n');
+}
+
+// ===== Claudeに渡す用テキスト =====
+function fmt(v,p){ return v==null||isNaN(v) ? '-' : v.toFixed(p.dp); }
+function summaryText(){
+ if(!samples.length) return null;
+ const L=[];
+ const mins = ((samples[samples.length-1].time - samples[0].time)/60000).toFixed(1);
+ L.push('【スズキ パレットSW OBD2データ】');
+ L.push(`取得日時: ${startTime.toLocaleString('ja-JP')}`);
+ L.push(`計測時間: 約${mins}分（${samples.length}サンプル） / 通信方式: ${protocol||'-'}`);
+ L.push(dtcText());
+ L.push('');
+ L.push('項目 | 最新 | 最小 | 平均 | 最大');
+ for(const p of ALL){
+  const vs = samples.map(s=>s[p.key]).filter(v=>v!=null && !isNaN(v));
+  if(!vs.length) continue;
+  const avg = vs.reduce((a,b)=>a+b,0)/vs.length;
+  L.push(`${p.label}(${p.unit}) | ${fmt(latest[p.key],p)} | ${fmt(Math.min(...vs),p)} | ${fmt(avg,p)} | ${fmt(Math.max(...vs),p)}`);
+ }
+ L.push('');
+ L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
+ L.push(''); L.push(meterText());
+ L.push('');
+ const ds = downsample(samples, 150);
+ const sec = samples.length>1 ? Math.round((samples[samples.length-1].time-samples[0].time)/1000/ds.length) : 0;
+ L.push(`走行ログ（${ds.length===samples.length?'全件':'約'+sec+'秒ごとの平均'}）:`);
+ L.push(csvText(ds));
+ L.push('');
+ L.push('このデータから車の状態を診断してください。');
+ return L.join('\n');
+}
+// ===== メーター：走行距離と燃料をページで積算 =====
+const METERKEY = 'palette_obd2_meter';
+const DISP_L = 0.658, VE = 0.80, AFR = 14.7, FUEL_DENS = 740;   // K6A 658cc、体積効率は仮の値（給油で補正）
+let meter = {odoBase:null, odoAdded:0, ta:{km:0,l:0}, tb:{km:0,l:0}, cal:1, minThr:null};
+let meterPrev = null, instKmL = null;
+function loadMeter(){ try{ Object.assign(meter, JSON.parse(localStorage.getItem(METERKEY)||'{}')); }catch(e){} showMeter(); }
+function saveMeter(){ try{ localStorage.setItem(METERKEY, JSON.stringify(meter)); }catch(e){} }
+// 燃料の流量（L/秒）を推定：スピードデンシティ方式
+function fuelRate(r){
+ if(r.rpm==null || r.map==null || r.rpm<300) return null;
+ if(r.throttle!=null) meter.minThr = meter.minThr==null ? r.throttle : Math.min(meter.minThr, r.throttle);
+ // アクセルを離して惰性で走っている間は燃料カット
+ if(r.throttle!=null && meter.minThr!=null && r.throttle <= meter.minThr+0.8 && r.rpm>1300 && (r.speed||0)>10) return 0;
+ const T = (r.iat==null ? 30 : r.iat) + 273.15;
+ const airKgS = (r.map*1000) * (DISP_L/1000) * VE * (r.rpm/120) / (287.05*T);
+ const trim = 1 + ((r.stft||0)+(r.ltft||0))/100;
+ return airKgS*1000/AFR*trim / FUEL_DENS * meter.cal;     // L/s
+}
+function meterStep(r){
+ const fr = fuelRate(r);
+ if(meterPrev){
+  const dt = (r.time - meterPrev.time)/1000;
+  if(dt>0 && dt<=30){
+   const km = ((r.speed||0)+(meterPrev.speed||0))/2 * dt/3600;
+   const l  = fr==null ? 0 : fr*dt;
+   for(const t of [meter.ta, meter.tb]){ t.km += km; t.l += l; }
+   meter.odoAdded += km;
+  }
+ }
+ instKmL = (fr && r.speed>3) ? (r.speed/3600)/fr : null;
+ meterPrev = r;
+ showMeter();
+ if(samples.length % 15 === 0) saveMeter();
+}
+const kmL = t => t.l>0.02 ? (t.km/t.l).toFixed(1) : '--';
+function showMeter(){
+ $('m_odo').textContent = meter.odoBase==null ? '未設定' : Math.floor(meter.odoBase + meter.odoAdded).toLocaleString();
+ $('m_inst').textContent = instKmL==null ? '--' : Math.min(99.9, instKmL).toFixed(1);
+ $('m_ta').textContent = meter.ta.km.toFixed(1); $('m_fa').textContent = kmL(meter.ta);
+ $('m_tb').textContent = meter.tb.km.toFixed(1); $('m_fb').textContent = kmL(meter.tb); $('m_lb').textContent = meter.tb.l.toFixed(2);
+ $('calShow').textContent = meter.cal.toFixed(2);
+}
+function meterText(){
+ return ['【メーター（ページで計算・燃費は推定）】',
+  `ODO: ${meter.odoBase==null?'未設定':Math.floor(meter.odoBase+meter.odoAdded)+' km'}`,
+  `トリップA: ${meter.ta.km.toFixed(1)} km / 平均燃費 ${kmL(meter.ta)} km/L`,
+  `トリップB: ${meter.tb.km.toFixed(1)} km / 推定燃料 ${meter.tb.l.toFixed(2)} L / 平均燃費 ${kmL(meter.tb)} km/L`,
+  `燃費の補正係数: ${meter.cal.toFixed(2)}`].join('\n');
+}
+
+const LOGKEY = 'palette_obd2_log';
+function saveLog(){
+ try{
+  const keys = ALL.map(p=>p.key);
+  localStorage.setItem(LOGKEY, JSON.stringify({start:+startTime, protocol, keys,
+   rows: samples.map(r=>[+r.time, ...keys.map(k=>r[k]==null?null:Math.round(r[k]*10)/10)])}));
+ }catch(e){}
+}
+function loadLog(){
+ try{
+  const d = JSON.parse(localStorage.getItem(LOGKEY)||'null');
+  if(!d || !d.rows.length) return;
+  samples = d.rows.map(a=>{ const r={time:new Date(a[0])}; d.keys.forEach((k,i)=>r[k]=a[i+1]); return r; });
+  startTime = new Date(d.start); protocol = d.protocol||'';
+  $('meta').textContent = `保存済みの記録 ${samples.length}件（${startTime.toLocaleString('ja-JP')}〜）`;
+ }catch(e){}
+}
+function tripStats(){
+ let dist=0, idle=0, drive=0, stops=0, warm=null, moving=false;
+ for(let i=1;i<samples.length;i++){
+  const a=samples[i-1], s=samples[i], dt=(s.time-a.time)/1000;
+  if(dt<=0 || dt>30) continue;
+  if(s.speed!=null) dist += s.speed*dt/3600;
+  if(s.speed===0 && s.rpm>300) idle += dt; else if(s.speed>0) drive += dt;
+  if(moving && s.speed===0) stops++;
+  moving = s.speed>0;
+  if(warm==null && s.coolant>=80) warm = (s.time-samples[0].time)/60000;
+ }
+ const m = x=>Math.round(x/60);
+ return [`走行距離（推定）: ${dist.toFixed(1)} km`, `走行時間: ${m(drive)}分 / アイドリング: ${m(idle)}分 / 停止回数: ${stops}回`,
+  `暖機（水温80℃）まで: ${warm==null?'未到達':warm.toFixed(1)+'分'}`];
+}
+function downsample(rows, max){
+ if(rows.length<=max) return rows;
+ const n = Math.ceil(rows.length/max), out=[];
+ for(let i=0;i<rows.length;i+=n){
+  const g = rows.slice(i,i+n), r = {time:g[0].time};
+  for(const p of ALL){ const v=g.map(x=>x[p.key]).filter(x=>x!=null&&!isNaN(x)); r[p.key]= v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; }
+  out.push(r);
+ }
+ return out;
+}
+function csvText(rows){
+ const keys = ALL.filter(p=>rows.some(r=>r[p.key]!=null));
+ const head = ['時刻',...keys.map(p=>`${p.label}(${p.unit})`)].join(',');
+ return [head, ...rows.map(r=>[r.time.toLocaleTimeString('ja-JP'),...keys.map(p=>fmt(r[p.key],p))].join(','))].join('\n');
+}
+async function copy(text){
+ if(!text){ toast('まだデータがありません'); return; }
+ try{ await navigator.clipboard.writeText(text); }
+ catch(e){
+  const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta);
+  ta.select(); document.execCommand('copy'); ta.remove();
+ }
+ toast('コピーしました');
+}
+
+// ===== 拡張：スズキ独自データ探索 =====
+let loopPromise = null, extBusy = false, abortExt = false;
+let ecus = [], found = new Map(), extLines = [];
+const ECU_NAMES = {'7E0':'エンジン','7E1':'AT（ミッション）','7E2':'ECU 7E2','7E3':'ECU 7E3'};
+// 読み取り専用コマンドだけ許可（消去04/14、書込2E、作動2F/31、リセット11、セッション10、セキュリティ27 などは不可）
+const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[3789A][0-9A-F]*|2[12][0-9A-F]+|3E0[01]|1081|1003)$/;
+
+function extOut(t){ extLines.push(t); const o=$('extOut'); o.textContent=extLines.join('\n'); o.scrollTop=o.scrollHeight; }
+const hx = (n,w=2)=>n.toString(16).toUpperCase().padStart(w,'0');
+function hexBytes(s){ const b=[]; for(let i=0;i+2<=s.length;i+=2) b.push(parseInt(s.slice(i,i+2),16)); return b; }
+function toHex(b){ return b.map(x=>hx(x)).join(' '); }
+function toAscii(b){ return b.map(x=>x>=32&&x<127?String.fromCharCode(x):'.').join(''); }
+
+// ヘッダ付きCAN応答を ECUごとのメッセージに組み立てる（複数フレーム対応）
+function canFrames(resp){
+ const msgs = new Map();
+ for(const l of lines(resp)){
+  if(!/^[0-9A-F]{5,}$/.test(l)) continue;
+  const h = l.slice(0,3), b = hexBytes(l.slice(3));
+  const pci = b[0]>>4, m = msgs.get(h);
+  if(pci===0) msgs.set(h, {len:b[0]&15, data:b.slice(1)});
+  else if(pci===1) msgs.set(h, {len:((b[0]&15)<<8)|b[1], data:b.slice(2)});
+  else if(pci===2 && m) m.data.push(...b.slice(1));
+ }
+ const out = new Map();
+ for(const [h,m] of msgs) out.set(h, m.data.slice(0,m.len));
+ return out;
+}
+function target(){ const [tx,rx] = $('scanTarget').value.split('|'); return {tx, rx, name:ECU_NAMES[tx]||('ECU '+tx)}; }
+async function setTarget(t){ await cmd('ATH1'); await cmd('ATSH'+t.tx); await cmd('ATCRA'+t.rx); }
+
+// 1つの番号を読む → データ部分（バイト配列）か null
+async function readId(mode, id, t){
+ const r = await cmd(mode+id);
+ const ok = parseInt(mode,16)+0x40, idB = hexBytes(id);
+ if(isCAN){
+  const p = canFrames(r).get(t.rx);
+  if(p && p[0]===ok && idB.every((b,i)=>p[1+i]===b)) return p.slice(1+idB.length);
+  return null;
+ }
+ const s = lines(r).join(''), i = s.indexOf(hx(ok)+id);
+ return i>=0 ? hexBytes(s.slice(i+2+id.length)) : null;
+}
+
+// 計測を一時停止 → 拡張処理 → 元の設定に戻して再開
+async function withPause(fn){
+ if(extBusy || !connected) return;
+ extBusy = true; abortExt = false; setExtButtons(false);
+ const was = running; running = false;
+ if(loopPromise) await loopPromise;
+ setStatus('探索中…');
+ await cmd('ATI');
+ try{ await fn(); }catch(e){ extOut('エラー: '+(e.message||e)); }
+ finally{
+  if(connected){
+   try{
+    const em = echoMode; echoMode = false;           // リセット直後は照合せずに受ける
+    await cmd('ATWS',5000);
+    for(const c of [em?'ATE1':'ATE0','ATL0','ATS0','ATH0','ATAT1','ATSP'+protoNum]) await cmd(c);
+    echoMode = em;
+    await cmd('ATI');                                  // ここで余った返事を掃除
+   }catch(e){}
+  }
+  extBusy = false; $('scanProg').textContent=''; setExtButtons(false);
+  if(was && connected){ running = true; setStatus(transport.name==='デモ'?'デモ実行中':'接続中','on'); loopPromise = loop(); }
+ }
+}
+function setExtButtons(){
+ document.querySelectorAll('button.ext').forEach(b=>b.disabled = !connected || extBusy);
+ $('btnAbort').disabled = !extBusy;
+}
+function udsStatus(st){
+ const t = [];
+ if(st&0x01) t.push('現在異常');
+ if(st&0x04) t.push('保留');
+ if(st&0x08) t.push('確定・記録');
+ if(st&0x20) t.push('消去後に発生歴あり');
+ if(st&0x80) t.push('警告灯要求');
+ if(!t.length && (st&0x02)) t.push('今回の運転で発生');
+ return t.length ? t.join('・') : '過去の記録';
+}
+function needCAN(){ if(!isCAN){ extOut('※この車の通信方式（'+protoNum+'）ではこの機能は使えません'); return false; } return true; }
+
+async function ecuSearch(deep){
+ if(!needCAN()) return;
+ extOut(`--- ECU検索${deep?'（深く）':''} ---`);
+ await cmd('ATH1'); await cmd('ATST19');
+ const seen = new Map();
+ const add = (tx, map)=>{
+  for(const [rx,p] of map){
+   if(seen.has(rx)) continue;
+   const t = tx || hx(parseInt(rx,16)-8,3);
+   seen.set(rx, {tx:t, rx, name:ECU_NAMES[t]||('ECU '+t)});
+   extOut(`応答あり：${ECU_NAMES[t]||'不明なECU'}  送信${t} → 受信${rx}  [${toHex(p)}]`);
+  }
+ };
+ await cmd('ATSH7DF'); add(null, canFrames(await cmd('0100',6000)));
+ const list = [];
+ for(let a=0x7E0;a<=0x7E7;a++) list.push(a);
+ if(deep){ await cmd('ATCF700'); await cmd('ATCM700'); for(let a=0x700;a<0x7E0;a++) list.push(a); }
+ for(const a of list){
+  if(abortExt){ extOut('中止しました'); break; }
+  const tx = hx(a,3);
+  $('scanProg').textContent = `${tx} を確認中…（見つかったECU ${seen.size}個）`;
+  await cmd('ATSH'+tx);
+  const r1 = canFrames(await cmd('3E00'));
+  for(const [rx,p] of r1) if(p[0]===0x7F && !seen.has(rx)){ const r2 = canFrames(await cmd('3E01')).get(rx); if(r2) extOut(`  └ ${tx} は 3E01 に [${toHex(r2)}]（KWP2000方式の可能性）`); }
+  add(tx, r1);
+ }
+ ecus = [...seen.values()];
+ extOut(`見つかったECU：${ecus.length}個`);
+ if(ecus.length){
+  $('scanTarget').innerHTML = ecus.map(e=>`<option value="${e.tx}|${e.rx}">${e.name} (${e.tx})</option>`).join('');
+ }
+}
+
+async function vehicleInfo(){
+ extOut('--- 車両・ECU情報 ---');
+ if(isCAN){ await cmd('ATH1'); await cmd('ATSH7DF'); }
+ for(const [c,name] of [['0902','車台番号'],['0904','キャリブレーションID'],['090A','ECU名']]){
+  const r = await cmd(c, 6000);
+  if(isCAN){
+   let any = false;
+   for(const [h,p] of canFrames(r)) if(p[0]===0x49){ any=true; extOut(`${name} [${h}]：${toAscii(p.slice(3)).replace(/\.+/g,' ').trim()||'-'}  (${toHex(p.slice(3))})`); }
+   if(!any) extOut(`${name}：なし`);
+  } else extOut(`${name}：${r.replace(/\s+/g,' ').trim()}`);
+ }
+ if(isCAN){
+  const t = target(); await setTarget(t);
+  for(const did of ['F187','F188','F18A','F18C','F190','F191','F194','F195','F197','F19E']){
+   if(abortExt) break;
+   const d = await readId('22', did, t);
+   if(d) extOut(`${t.name} 22 ${did}：${toAscii(d)}  (${toHex(d)})`);
+  }
+  for(const id of ['80','86','87','88','89','8A','8C','90','91','92','94','97','99','9A','9B']){   // 古い方式 KWP2000
+   if(abortExt) break;
+   const d = await readId('1A', id, t);
+   if(d) extOut(`${t.name} 1A ${id}：${toAscii(d)}  (${toHex(d)})`);
+  }
+ }
+}
+
+// 故障コード命令の書き方を順番に試す（どれも読み取りのみ）
+const DTC_TRIES = [
+ ['1902FF',   0x59, 'UDS'],
+ ['1800FF00', 0x58, 'KWP 全部'],
+ ['1802FF00', 0x58, 'KWP 確定'],
+ ['18000000', 0x58, 'KWP 全部(別)'],
+ ['1800FFFF', 0x58, 'KWP 全部(別2)'],
+ ['1802FFFF', 0x58, 'KWP 確定(別)'],
+ ['13',       0x53, 'KWP 旧'],
+ ['03',       0x43, 'OBD 標準'],
+];
+const dtcWorked = {};
+function parseDtcResp(p, kind){
+ const codes = [];
+ if(kind===0x59){ for(let i=3;i+4<=p.length;i+=4){ const [a,b,c,st]=p.slice(i,i+4); if(a|b|c) codes.push(`${decodeDtc(hx(a)+hx(b))}-${hx(c)}（${udsStatus(st)}）`); } }
+ else if(kind===0x58){ for(let i=2;i+3<=p.length;i+=3){ const [a,b,st]=p.slice(i,i+3); if(a|b) codes.push(`${decodeDtc(hx(a)+hx(b))}（状態${hx(st)}${st&0x20?'・記録あり':''}${st&0x40?'・現在':''}）`); } }
+ else if(kind===0x53){ for(let i=2;i+2<=p.length;i+=2){ const [a,b]=p.slice(i,i+2); if(a|b) codes.push(decodeDtc(hx(a)+hx(b))); } }
+ else if(kind===0x43){ for(let i=2;i+2<=p.length;i+=2){ const [a,b]=p.slice(i,i+2); if(a|b) codes.push(decodeDtc(hx(a)+hx(b))); } }
+ return codes;
+}
+async function allDtc(){
+ if(!needCAN()) return;
+ if(!ecus.length){ extOut('先に「ECU検索」を押してください'); return; }
+ extOut('--- 全ECU 故障コード ---');
+ for(const t of ecus){
+  if(abortExt) break;
+  await setTarget(t);
+  const tried = [];
+  let ok = false;
+  const order = dtcWorked[t.tx] ? [dtcWorked[t.tx], ...DTC_TRIES.filter(x=>x!==dtcWorked[t.tx])] : DTC_TRIES;
+  for(const tr of order){
+   if(abortExt) break;
+   const [c, kind, label] = tr;
+   const p = canFrames(await cmd(c, 6000)).get(t.rx);
+   if(p && p[0]===kind){
+    const codes = parseDtcResp(p, kind);
+    extOut(`${t.name}：${codes.length ? codes.join(', ') : '故障コードなし'}  ［${label} ${c} で読取：${toHex(p)}］`);
+    dtcWorked[t.tx] = tr; ok = true; break;
+   }
+   tried.push(`${c}→${p ? toHex(p) : '応答なし'}`);
+  }
+  if(!ok) extOut(`${t.name}：読めませんでした\n  試した命令：${tried.join(' / ')}`);
+ }
+}
+
+function scanRange(){
+ const pre = $('scanPreset').value;
+ let mode, from, to;
+ if(pre==='custom'){ mode=$('scanMode').value; from=$('rangeFrom').value.trim().toUpperCase(); to=$('rangeTo').value.trim().toUpperCase(); }
+ else [mode, from, to] = pre.split('|');
+ const w = mode==='22' ? 4 : 2, f = parseInt(from,16), e = parseInt(to,16);
+ if(!/^[0-9A-F]+$/.test(from+to) || isNaN(f) || isNaN(e) || e<f || e >= 16**w) throw new Error('範囲の指定が正しくありません');
+ if(e-f > 1023) throw new Error('1回の探索は1024個までにしてください');
+ return {mode, f, e, w};
+}
+async function didScan(){
+ const {mode, f, e, w} = scanRange();
+ const t = isCAN ? target() : {tx:'', rx:'', name:'エンジン'};
+ extOut(`--- データ探索 ${t.name} ${mode} ${hx(f,w)}〜${hx(e,w)} ---`);
+ if(isCAN) await setTarget(t); else await cmd('ATH0');
+ await cmd('ATST19');
+ let hits = 0;
+ for(let d=f; d<=e; d++){
+  if(abortExt){ extOut('中止しました'); break; }
+  const id = hx(d,w);
+  if((d-f)%8===0) $('scanProg').textContent = `${mode} ${id} を確認中…（${d-f}/${e-f+1}、発見 ${hits}件）`;
+  const data = await readId(mode, id, t);
+  if(data){ hits++; found.set(`${t.tx}|${mode}${id}`, {t, mode, id, data}); extOut(`✅ ${mode} ${id}：${toHex(data)}`); }
+ }
+ extOut(`発見 ${hits}件（「再読取で比較」でエンジン状態を変えて比べられます）`);
+}
+async function reread(){
+ if(!found.size){ extOut('先に「データ探索」をしてください'); return; }
+ extOut('--- 再読取（★＝前回から変化） ---');
+ let cur = null;
+ for(const v of found.values()){
+  if(abortExt){ extOut('中止しました'); break; }
+  if(isCAN && cur!==v.t.tx){ await setTarget(v.t); cur = v.t.tx; }
+  const d = await readId(v.mode, v.id, v.t);
+  if(!d){ extOut(`　－ ${v.mode} ${v.id}：応答なし`); continue; }
+  const changed = toHex(d)!==toHex(v.data);
+  extOut(`${changed?'★':'　'} ${v.mode} ${v.id}：${toHex(v.data)}${changed?'  →  '+toHex(d):''}`);
+  v.data = d;
+ }
+}
+async function sendCustom(){
+ const cmds = $('customCmd').value.toUpperCase().replace(/\s+/g,'').split(/[;；]/).filter(Boolean);
+ if(!cmds.length) return;
+ const bad = cmds.find(c=>!SAFE.test(c));
+ if(bad){ extOut(`「${bad}」は安全のため送れません（読み取り系のみ可）`); return; }
+ extOut('--- 手動コマンド ---');
+ for(const c of cmds){
+  if(abortExt) break;
+  const r = await cmd(c, 6000);
+  extOut(`> ${c}\n${r.replace(/[\r\n]+/g,'\n').trim()}`);
+ }
+}
+
+// ===== K-line（7番ピン）：ABS・エアバッグ・メーター等を探す =====
+const KNAMES = {'10':'エンジン系','11':'エンジン系','12':'エンジン系','18':'AT系','28':'ABS系','29':'ABS系','2A':'ABS系','40':'ボディ系','41':'ボディ系','58':'エアバッグ系','59':'エアバッグ系','60':'メーター系','61':'メーター系','70':'ボディ系','72':'キーレス系'};
+const isData = l => /^[0-9A-F]{6,}$/.test(l);
+async function klineOne(ad, slow){
+ await cmd('ATPC');
+ if(slow){ await cmd('ATSP4'); await cmd('ATIIA'+ad); } else await cmd('ATSP5');
+ await cmd('ATSH81'+ad+'F1');
+ return lines(await cmd('3E01', slow ? 9000 : 6000)).filter(isData);
+}
+async function klineScan(deep){
+ extOut(`--- 7番ピン（K-line）の機器を探す${deep?'（全部）':''} ---`);
+ const list = deep ? [...Array(254).keys()].map(i=>i+1).filter(a=>a!==0xF1)
+  : [0x10,0x11,0x18,0x28,0x29,0x2A,0x40,0x41,0x58,0x59,0x60,0x61,0x70,0x72,0xC0,0xD0];
+ await cmd('ATH1'); await cmd('ATST32');
+ let found = 0;
+ for(const a of list){
+  if(abortExt){ extOut('中止しました'); break; }
+  const ad = hx(a);
+  $('scanProg').textContent = `7番ピン アドレス ${ad} を確認中…（${list.indexOf(a)+1}/${list.length}、発見 ${found}）`;
+  let ok = await klineOne(ad, false);
+  let how = '高速';
+  if(!ok.length && !deep){ ok = await klineOne(ad, true); how = '低速'; }
+  if(!ok.length) continue;
+  found++;
+  extOut(`✅ アドレス ${ad}（${KNAMES[ad]||'不明'}）が応答［${how}接続］：${ok.join(' / ')}`);
+  for(const c of ['1A80','1A9A','1800FF00','1802FF00','13']){
+   if(abortExt) break;
+   const l2 = lines(await cmd(c, 6000)).filter(isData);
+   extOut(`   ${c} → ${l2.length ? l2.join(' / ') : '応答なし'}`);
+  }
+ }
+ await cmd('ATPC');
+ extOut(`7番ピンで見つかった機器：${found}個${found?'':'（この車は7番ピンを使っていないか、アダプターが対応していない可能性）'}`);
+}
+
+// ===== 故障履歴の徹底捜索：読み取り命令の書き方を総当たり =====
+const NRC = {'10':'拒否','11':'その命令は無い','12':'書き方が違う','13':'長さが違う','22':'今は条件が合わない','31':'範囲外','33':'鍵が必要','78':'処理中','7E':'今のモードでは不可','7F':'今のモードでは不可'};
+async function hunt(){
+ if(!needCAN()) return;
+ const targets = ecus.length ? ecus : [{tx:'7E0',rx:'7E8',name:'エンジン'},{tx:'7E1',rx:'7E9',name:'AT（ミッション）'}];
+ const cmds = [];
+ for(const st of ['00','01','02','03','04','08','FF']) for(const g of ['FF00','FFFF','0000','8000','C000','4000']) cmds.push('18'+st+g);   // KWP2000 状態別
+ cmds.push('17FF00','170000','1700','13','1300','1301','1302');                                                          // KWP 旧来の読み方
+ for(const sf of ['01FF','02FF','0208','0204','0A','0F','1308','0F08','1702FF','0B','0C','0D','0E']) cmds.push('19'+sf);   // UDS
+ extOut('--- 故障履歴の徹底捜索 ---');
+ for(const t of targets){
+  if(abortExt) break;
+  extOut(`■ ${t.name}（${t.tx}）`);
+  for(const session of [null, '1081', '1003']){
+   if(abortExt) break;
+   await setTarget(t);
+   if(session){ const sp = canFrames(await cmd(session, 3000)).get(t.rx); extOut(`  診断モード切替 ${session}：${sp ? toHex(sp) : '応答なし'}`); if(!sp || sp[0]===0x7F) continue; }
+   const ng = {};
+   let hits = 0;
+   for(const c of cmds){
+    if(abortExt) break;
+    $('scanProg').textContent = `${t.name} ${session||'通常'} ${c} を試し中…`;
+    const p = canFrames(await cmd(c, 4000)).get(t.rx);
+    if(!p){ (ng['応答なし'] ||= []).push(c); continue; }
+    if(p[0]===0x7F){ const k = `${hx(p[2]||0)} ${NRC[hx(p[2]||0)]||''}`; (ng[k] ||= []).push(c); continue; }
+    hits++;
+    const kind = p[0];
+    const codes = parseDtcResp(p, kind);
+    extOut(`  ✅ ${c} → ${toHex(p)}${codes.length ? '  ⇒ '+codes.join(', ') : ''}`);
+   }
+   for(const [k,v] of Object.entries(ng)) extOut(`  ✕ ${k}：${v.length}件（例 ${v.slice(0,3).join(', ')}）`);
+   if(hits) break;   // 読めたらこのECUは終わり
+  }
+ }
+ extOut('捜索おわり');
+}
+
+// ===== ボタン =====
+$('btnHunt').onclick = ()=>withPause(hunt);
+$('btnKline').onclick = ()=>withPause(()=>klineScan(false));
+$('btnKlineDeep').onclick = ()=>withPause(()=>klineScan(true));
+$('btnEcu').onclick = ()=>withPause(()=>ecuSearch(false));
+$('btnEcuDeep').onclick = ()=>withPause(()=>ecuSearch(true));
+$('btnInfo').onclick = ()=>withPause(vehicleInfo);
+$('btnAllDtc').onclick = ()=>withPause(allDtc);
+$('btnScan').onclick = ()=>{ try{ scanRange(); }catch(e){ toast(e.message); return; } withPause(didScan); };
+$('btnReread').onclick = ()=>withPause(reread);
+$('btnSend').onclick = ()=>withPause(sendCustom);
+$('btnAbort').onclick = ()=>{ abortExt = true; };
+$('btnExtClear').onclick = ()=>{ extLines = []; $('extOut').textContent=''; };
+$('btnExtCopy').onclick = ()=>copy(extLines.length ? '【スズキ パレットSW 拡張探索結果】\n通信方式: '+protocol+'\n\n'+extLines.join('\n')+'\n\nこの結果を解析してください。' : null);
+$('scanPreset').onchange = ()=>{ $('customRange').hidden = $('scanPreset').value!=='custom'; };
+$('btnConnect').onclick = ()=>{
+ if(!navigator.bluetooth){ $('warn').hidden=false; toast('Bluefyで開いてください'); return; }
+ start('ble');
+};
+$('btnDemo').onclick = ()=>start('demo');
+$('btnStop').onclick = stop;
+$('btnDtc').onclick = readDtc;
+$('btnCopy').onclick = ()=>copy(summaryText());
+$('btnCsv').onclick = ()=>copy(samples.length ? csvText(downsample(samples, 600)) : null);
+$('btnClearLog').onclick = ()=>{
+ const b = $('btnClearLog');
+ if(running){ toast('停止してから消してください'); return; }
+ if(b.dataset.sure!=='1'){ b.dataset.sure='1'; b.textContent='本当に消す？'; setTimeout(()=>{ b.dataset.sure=''; b.textContent='記録を消す'; },3000); return; }
+ samples=[]; lastDtc=null; try{ localStorage.removeItem(LOGKEY); }catch(e){}
+ b.dataset.sure=''; b.textContent='記録を消す'; $('meta').textContent=''; toast('記録を消しました');
+};
+
+if(!navigator.bluetooth) $('warn').hidden = false;
+buildGrid();
+setExtButtons();
+loadLog();
+loadMeter();
+$('btnMeterOpt').onclick = ()=>{ $('meterOpt').hidden = !$('meterOpt').hidden; };
+function twice(btn, label, fn){
+ if(btn.dataset.sure!=='1'){ btn.dataset.sure='1'; btn.textContent='本当に？'; setTimeout(()=>{ btn.dataset.sure=''; btn.textContent=label; },3000); return; }
+ btn.dataset.sure=''; btn.textContent=label; fn();
+}
+$('btnRstA').onclick = ()=>twice($('btnRstA'),'Aリセット',()=>{ meter.ta={km:0,l:0}; saveMeter(); showMeter(); toast('トリップAをリセット'); });
+$('btnRstB').onclick = ()=>twice($('btnRstB'),'Bリセット',()=>{ meter.tb={km:0,l:0}; saveMeter(); showMeter(); toast('トリップBをリセット'); });
+$('btnOdo').onclick = ()=>{
+ const v = parseFloat($('odoInput').value);
+ if(!(v>=0)){ toast('ODOの数字を入れてください'); return; }
+ meter.odoBase = v; meter.odoAdded = 0; saveMeter(); showMeter(); $('odoInput').value=''; toast('ODOを設定しました');
+};
+$('btnFuel').onclick = ()=>{
+ const v = parseFloat($('fuelInput').value);
+ if(!(v>0)){ toast('給油した量（L）を入れてください'); return; }
+ if(meter.tb.l < 1 || meter.tb.km < 20){ toast('トリップBが短すぎます（20km以上走ってから）'); return; }
+ const f = v / meter.tb.l;
+ if(f<0.5 || f>2){ toast('差が大きすぎます。満タン同士か確認してください'); return; }
+ meter.cal *= f;
+ const real = (meter.tb.km / v).toFixed(1);
+ meter.tb = {km:0,l:0}; saveMeter(); showMeter(); $('fuelInput').value='';
+ toast(`実燃費 ${real} km/L。補正してBをリセットしました`);
+};
+</script>
+</body>
+</html>
