@@ -66,6 +66,9 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <div class="grid" id="grid"></div>
 
+<button id="btnMark" style="width:100%;margin:10px 0 2px">📍 今の瞬間に印をつける（ブルブル・違和感があった時／停車中に）</button>
+<div id="evOut" class="hint"></div>
+
 <h2 class="sec">メーター（ページで計算）</h2>
 <div class="grid" id="meterGrid">
  <div class="tile"><div class="lbl">ODO</div><div class="val"><span id="m_odo">--</span><small>km</small></div></div>
@@ -99,6 +102,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
+<button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
 <button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
  <button class="ext" id="btnKline">7番ピン機器を探す</button>
@@ -173,7 +177,38 @@ const PIDS = [
  {id:'1F', key:'runtime',  label:'始動後の時間',   unit:'秒',   f:(a,b)=>a*256+b,   dp:0},
 ];
 const VOLT = {key:'volt', label:'バッテリー電圧', unit:'V', dp:1, max:15};
-const ALL = [...PIDS, VOLT];
+// 車が対応していれば自動で追加する項目
+const EXTRA = [
+ {id:'03', key:'fsys',   label:'燃料制御(2=補正中 4=カット等)', unit:'', f:a=>a, dp:0},
+ {id:'0A', key:'fpress', label:'燃圧', unit:'kPa', f:a=>a*3, dp:0},
+ {id:'10', key:'maf',    label:'吸入空気量', unit:'g/s', f:(a,b)=>(a*256+b)/100, dp:1},
+ {id:'14', key:'o2f',    label:'O2センサー前', unit:'V', f:a=>a/200, dp:2, max:1},
+ {id:'24', key:'lam',    label:'空燃比センサーλ', unit:'', f:(a,b)=>(a*256+b)/32768, dp:2},
+ {id:'34', key:'lam2',   label:'空燃比センサーλ', unit:'', f:(a,b)=>(a*256+b)/32768, dp:2},
+ {id:'2C', key:'egr',    label:'EGR指令', unit:'%', f:a=>a*100/255, dp:0, max:100},
+ {id:'2E', key:'purge',  label:'パージ指令', unit:'%', f:a=>a*100/255, dp:0, max:100},
+ {id:'2F', key:'fuel',   label:'燃料残量', unit:'%', f:a=>a*100/255, dp:0, max:100},
+ {id:'33', key:'baro',   label:'大気圧', unit:'kPa', f:a=>a, dp:0},
+ {id:'3C', key:'cat',    label:'触媒温度', unit:'℃', f:(a,b)=>(a*256+b)/10-40, dp:0},
+ {id:'42', key:'ecuv',   label:'ECU電圧', unit:'V', f:(a,b)=>(a*256+b)/1000, dp:2, max:15},
+ {id:'43', key:'aload',  label:'絶対負荷', unit:'%', f:(a,b)=>(a*256+b)*100/255, dp:0},
+ {id:'44', key:'cmdlam', label:'目標空燃比λ', unit:'', f:(a,b)=>(a*256+b)/32768, dp:2},
+ {id:'45', key:'relthr', label:'相対スロットル', unit:'%', f:a=>a*100/255, dp:1, max:100},
+ {id:'46', key:'amb',    label:'外気温', unit:'℃', f:a=>a-40, dp:0},
+ {id:'47', key:'thrB',   label:'スロットルB', unit:'%', f:a=>a*100/255, dp:1, max:100},
+ {id:'49', key:'accD',   label:'アクセルペダルD', unit:'%', f:a=>a*100/255, dp:1, max:100},
+ {id:'4A', key:'accE',   label:'アクセルペダルE', unit:'%', f:a=>a*100/255, dp:1, max:100},
+ {id:'4C', key:'thrCmd', label:'スロットル指令', unit:'%', f:a=>a*100/255, dp:1, max:100},
+ {id:'5C', key:'oilt',   label:'油温', unit:'℃', f:a=>a-40, dp:0},
+ {id:'5E', key:'frate',  label:'燃料流量', unit:'L/h', f:(a,b)=>(a*256+b)/20, dp:2},
+];
+const FAST = new Set(['0C','0D','0B','11','06','0E','45','4C','49']);   // 毎回読む（速く変わる）項目
+let ALL = [...PIDS, VOLT];
+function addExtras(ids){
+ for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
+ ALL = [...PIDS, VOLT];
+ try{ localStorage.setItem('palette_obd2_extra', JSON.stringify(PIDS.map(p=>p.id))); }catch(e){}
+}
 
 // よく使われるBLE版ELM327のサービスUUID
 const SERVICES = [
@@ -343,12 +378,18 @@ function demoTransport(){
     else if(hdr==='7E0' && c==='221001') r = fr('621001'+h(rpm/32));
     else if(hdr==='7E0' && c==='221005') r = fr('621005'+h(Math.min(88,40+t*2)+40));
     else if(hdr==='7E0' && c==='22100A') r = fr('62100A'+h(142));
+    else if(c==='2101' && hdr==='7E0') r = fr('6101'+h(rpm/32)+'5A10');
+    else if(c==='2105' && hdr==='7E1') r = fr('6105'+h(60+t/10)+'00');
+    else if(c==='1A90' && hdr==='7E0') r = fr('5A90'+'4D4B3231');
+    else if(c.startsWith('21')||c.startsWith('1A')) r = fr('7F'+c.slice(0,2)+'31');
     else if(c.startsWith('22')) r = fr('7F2231');
     else r = 'NO DATA';
     setTimeout(()=>onData(ec+r+'\r\r>'), 30); return;
    }
    if(c.startsWith('AT')) r = c==='ATRV' ? (13.9+Math.random()*.4).toFixed(1)+'V' : c==='ATDPN' ? 'A6' : c==='ATZ' ? 'ELM327 v1.5' : 'OK';
    else if(c==='0100') r = '4100BE3EB813';
+   else if(c==='0120') r = '412080022001';
+   else if(c==='0140') r = '41404C900000';
    else if(c==='010C') r = '410C'+h(rpm*4,2);
    else if(c==='010D') r = '410D'+h(spd);
    else if(c==='0105') r = '4105'+h(Math.min(88, 40+t*2)+40);
@@ -374,6 +415,7 @@ function demoTransport(){
    else if(c==='020C00') r = '420C00'+h(2400*4,2);
    else if(c==='020D00') r = '420D00'+h(52);
    else if(c==='020500') r = '42050'+'0'+h(86+40);
+   else if(/^01[0-5][0-9A-F]$/.test(c)) r = '41'+c.slice(2)+'6480';
    else r = 'NO DATA';
    setTimeout(()=>onData(ec+r+'\r\r>'), 40);
   },
@@ -397,42 +439,83 @@ async function initElm(){
  supported = new Set();
  const mask = ((b[0]<<24)>>>0) + (b[1]<<16) + (b[2]<<8) + b[3];
  for(let n=1;n<=32;n++) if(mask & (1<<(32-n))) supported.add(n.toString(16).toUpperCase().padStart(2,'0'));
+ // 0120 / 0140 / 0160 … 対応項目の続きを調べる
+ for(const base of ['20','40','60']){
+  if(!supported.has(base)) break;
+  const bb = parsePid(await cmd('01'+base, 6000), base);
+  if(!bb || bb.length<4) break;
+  const m2 = ((bb[0]<<24)>>>0) + (bb[1]<<16) + (bb[2]<<8) + bb[3], off = parseInt(base,16);
+  for(let n=1;n<=32;n++) if(m2 & (1<<(32-n))) supported.add((off+n).toString(16).toUpperCase().padStart(2,'0'));
+ }
+ log('対応PID: '+[...supported].join(' '));
+ addExtras([...supported]);
+ buildGrid();
  PIDS.forEach(p=>{ if(!supported.has(p.id)) $('t_'+p.key).classList.add('na'); });
  const dp = (await cmd('ATDPN')).replace(/[^0-9A-F]/gi,'').toUpperCase();
  const num = dp.replace(/^A/,'');
  protocol = dp; protoNum = num || '0'; isCAN = /^[6-9A-C]$/.test(num);
  $('meta').textContent = `アダプター: ${transport.name} / 通信方式: ${num||'?'}${isCAN?'（CAN）':''}`;
 }
+let cycle = 0, misses = 0;
 async function loop(){
  while(running){
   const row = {time:new Date()};
+  const slowTurn = cycle % 5 === 0; cycle++;
   for(const p of PIDS){
    if(!running) break;
    if(!supported.has(p.id)) continue;
+   if(!slowTurn && !FAST.has(p.id)){ row[p.key] = latest[p.key]; continue; }   // 前回の値を引き継ぐ
    const b = parsePid(await cmd('01'+p.id), p.id);
    const v = b ? p.f(b[0], b[1]) : null;
    show(p, v); row[p.key] = v;
   }
   if(!running) break;
-  const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
-  const vv = vr ? parseFloat(vr[1]) : null; show(VOLT, vv); row.volt = vv;
+  if(slowTurn){
+   const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
+   show(VOLT, vr ? parseFloat(vr[1]) : null);
+  }
+  row.volt = latest.volt;
+  if(row.rpm==null && row.speed==null){ if(++misses % 5 === 0) await cmd('ATI'); continue; }   // 読めなかった回は記録しない
+  misses = 0;
+  detect(row);
   meterStep(row);
-  samples.push(row); if(samples.length>20000) samples.shift();
-  if(samples.length % 15 === 0) saveLog();
+  samples.push(row); if(samples.length>12000) samples.shift();
+  if(samples.length % 30 === 0) saveLog();
   $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
  }
+}
+// ===== 異変の自動検出 =====
+let events = [];
+const lastEv = {};
+function addEvent(t, type, text){
+ if(lastEv[type] && t - lastEv[type] < 15000) return;
+ lastEv[type] = t;
+ events.push({t, text}); if(events.length>60) events.shift();
+ $('evOut').textContent = '検出：' + events.slice(-4).map(e=>new Date(e.t).toLocaleTimeString('ja-JP')+' '+e.text).join(' ／ ');
+ toast('📍 '+text);
+}
+function detect(row){
+ const prev = samples[samples.length-1];
+ if(!prev || row.rpm==null || prev.rpm==null || row.time-prev.time>10000) return;
+ const t = +row.time, mt = meter.minThr, offPedal = r => r.throttle==null || mt==null || r.throttle <= mt+1.5;
+ if(prev.rpm>400 && row.rpm<300) addEvent(t,'stall','エンジン停止（エンスト？）');
+ else if(row.speed===0 && prev.speed===0 && row.rpm>=300 && row.rpm<650) addEvent(t,'dip',`アイドリング落ち込み ${Math.round(row.rpm)}rpm`);
+ else if(row.speed===0 && prev.speed===0 && offPedal(row) && offPedal(prev) && Math.abs(row.rpm-prev.rpm)>=120)
+  addEvent(t,'jump',`停車中に回転が急変 ${Math.round(prev.rpm)}→${Math.round(row.rpm)}rpm`);
+ if(row.volt!=null && row.volt<12.5 && row.rpm>500) addEvent(t,'volt',`電圧低下 ${row.volt}V`);
 }
 async function start(kind){
  try{
   transport = kind==='demo' ? demoTransport() : await bleTransport();
   const last = samples[samples.length-1];
-  if(!last || Date.now() - last.time > 30*60000){ samples=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
+  if(!last || Date.now() - last.time > 30*60000){ samples=[]; events=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
   latest={};
   buildGrid(); updateButtons(true); setStatus('初期化中…');
   await initElm();
   connected = true; setExtButtons(false);
   running = true; setStatus(kind==='demo'?'デモ実行中':'接続中','on');
   try{ await navigator.wakeLock?.request('screen'); }catch(e){}
+  cycle = 0;
   loopPromise = loop();
  }catch(e){
   log('エラー: '+(e.message||e));
@@ -530,6 +613,17 @@ function summaryText(){
  }
  L.push('');
  L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
+ L.push(''); for(const x of idleStats()) L.push(x);
+ if(events.length){
+  L.push(''); L.push('【検出した異変・印】');
+  for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}`);
+  for(const e of events.slice(-3)){
+   const rows = samples.filter(r=>r.time>=e.t-25000 && r.time<=e.t+10000);
+   if(rows.length){ L.push(''); L.push(`▼ ${new Date(e.t).toLocaleTimeString('ja-JP')}「${e.text}」前後の生データ`); L.push(csvText(rows)); }
+  }
+ }
+ const lastT = +samples[samples.length-1].time, recent = samples.filter(r=>r.time>=lastT-180000);
+ L.push(''); L.push(`▼ 直近3分の生データ（${recent.length}件・平均なし）`); L.push(csvText(recent));
  L.push(''); L.push(meterText());
  L.push('');
  const ds = downsample(samples, 150);
@@ -594,7 +688,7 @@ const LOGKEY = 'palette_obd2_log';
 function saveLog(){
  try{
   const keys = ALL.map(p=>p.key);
-  localStorage.setItem(LOGKEY, JSON.stringify({start:+startTime, protocol, keys,
+  localStorage.setItem(LOGKEY, JSON.stringify({start:+startTime, protocol, keys, events,
    rows: samples.map(r=>[+r.time, ...keys.map(k=>r[k]==null?null:Math.round(r[k]*10)/10)])}));
  }catch(e){}
 }
@@ -603,7 +697,7 @@ function loadLog(){
   const d = JSON.parse(localStorage.getItem(LOGKEY)||'null');
   if(!d || !d.rows.length) return;
   samples = d.rows.map(a=>{ const r={time:new Date(a[0])}; d.keys.forEach((k,i)=>r[k]=a[i+1]); return r; });
-  startTime = new Date(d.start); protocol = d.protocol||'';
+  startTime = new Date(d.start); protocol = d.protocol||''; events = d.events||[];
   $('meta').textContent = `保存済みの記録 ${samples.length}件（${startTime.toLocaleString('ja-JP')}〜）`;
  }catch(e){}
 }
@@ -621,6 +715,22 @@ function tripStats(){
  const m = x=>Math.round(x/60);
  return [`走行距離（推定）: ${dist.toFixed(1)} km`, `走行時間: ${m(drive)}分 / アイドリング: ${m(idle)}分 / 停止回数: ${stops}回`,
   `暖機（水温80℃）まで: ${warm==null?'未到達':warm.toFixed(1)+'分'}`];
+}
+function idleStats(){
+ const mt = meter.minThr, st = (a)=>{ if(!a.length) return null; const m=a.reduce((x,y)=>x+y,0)/a.length; return {min:Math.min(...a), max:Math.max(...a), avg:m, sd:Math.sqrt(a.reduce((x,y)=>x+(y-m)**2,0)/a.length)}; };
+ const col = (rows,k)=>rows.map(r=>r[k]).filter(v=>v!=null&&!isNaN(v));
+ const avg = (rows,k)=>{ const a=col(rows,k); return a.length ? (a.reduce((x,y)=>x+y,0)/a.length).toFixed(1) : '-'; };
+ const idle = samples.filter(r=>r.speed===0 && r.rpm>300 && r.coolant>=70 && (mt==null || r.throttle==null || r.throttle<=mt+1.5));
+ const drive = samples.filter(r=>r.speed>=20 && r.map>=60);
+ const L = ['【アイドリング分析（暖機後・停車中）】'];
+ const s = st(col(idle,'rpm'));
+ if(!s) L.push('データなし');
+ else{
+  L.push(`回転数: 最小${s.min.toFixed(0)} / 平均${s.avg.toFixed(0)} / 最大${s.max.toFixed(0)} rpm、ばらつき(標準偏差) ${s.sd.toFixed(0)}rpm（${idle.length}件）`);
+  L.push(`吸気管圧力 平均${avg(idle,'map')}kPa / 負荷 平均${avg(idle,'load')}% / 点火時期 平均${avg(idle,'timing')}°`);
+  L.push(`燃調 アイドリング時: 短期${avg(idle,'stft')}% 長期${avg(idle,'ltft')}% ／ 走行時: 短期${avg(drive,'stft')}% 長期${avg(drive,'ltft')}%`);
+ }
+ return L;
 }
 function downsample(rows, max){
  if(rows.length<=max) return rows;
@@ -844,9 +954,7 @@ function scanRange(){
  if(e-f > 1023) throw new Error('1回の探索は1024個までにしてください');
  return {mode, f, e, w};
 }
-async function didScan(){
- const {mode, f, e, w} = scanRange();
- const t = isCAN ? target() : {tx:'', rx:'', name:'エンジン'};
+async function scanCore(t, mode, f, e, w){
  extOut(`--- データ探索 ${t.name} ${mode} ${hx(f,w)}〜${hx(e,w)} ---`);
  if(isCAN) await setTarget(t); else await cmd('ATH0');
  await cmd('ATST19');
@@ -854,11 +962,36 @@ async function didScan(){
  for(let d=f; d<=e; d++){
   if(abortExt){ extOut('中止しました'); break; }
   const id = hx(d,w);
-  if((d-f)%8===0) $('scanProg').textContent = `${mode} ${id} を確認中…（${d-f}/${e-f+1}、発見 ${hits}件）`;
+  if((d-f)%8===0) $('scanProg').textContent = `${t.name} ${mode} ${id} を確認中…（${d-f}/${e-f+1}、発見 ${hits}件）`;
   const data = await readId(mode, id, t);
   if(data){ hits++; found.set(`${t.tx}|${mode}${id}`, {t, mode, id, data}); extOut(`✅ ${mode} ${id}：${toHex(data)}`); }
  }
- extOut(`発見 ${hits}件（「再読取で比較」でエンジン状態を変えて比べられます）`);
+ extOut(`発見 ${hits}件`);
+ return hits;
+}
+async function didScan(){
+ const {mode, f, e, w} = scanRange();
+ const t = isCAN ? target() : {tx:'', rx:'', name:'エンジン'};
+ await scanCore(t, mode, f, e, w);
+ extOut('（「再読取で比較」でエンジン状態を変えて比べられます）');
+}
+async function fullAuto(){
+ if(!needCAN()) return;
+ extOut('=== 全自動探索 ===');
+ if(!ecus.length) await ecuSearch(false);
+ const ts = ecus.length ? ecus : [{tx:'7E0',rx:'7E8',name:'エンジン'},{tx:'7E1',rx:'7E9',name:'AT（ミッション）'}];
+ for(const t of ts){
+  if(abortExt) break;
+  extOut(`■ ${t.name}（${t.tx}） 識別情報`);
+  await setTarget(t); await cmd('ATST32');
+  for(let a=0x80;a<=0x9F;a++){
+   if(abortExt) break;
+   const d = await readId('1A', hx(a), t);
+   if(d) extOut(`  1A ${hx(a)}：${toAscii(d)}  (${toHex(d)})`);
+  }
+  if(!abortExt) await scanCore(t, '21', 0, 255, 2);
+ }
+ extOut('=== 全自動探索おわり：「探索結果コピー」で貼ってください。その後、エアコンON/OFFや空ぶかしの後に「再読取で比較」を押すと、どの値が何かを突き止められます ===');
 }
 async function reread(){
  if(!found.size){ extOut('先に「データ探索」をしてください'); return; }
@@ -961,6 +1094,9 @@ async function hunt(){
 
 // ===== ボタン =====
 $('btnHunt').onclick = ()=>withPause(hunt);
+$('btnAuto').onclick = ()=>withPause(fullAuto);
+$('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（違和感あり）'); saveLog(); };
+document.addEventListener('visibilitychange', async ()=>{ if(document.visibilityState==='visible' && running){ try{ await navigator.wakeLock?.request('screen'); }catch(e){} } });
 $('btnKline').onclick = ()=>withPause(()=>klineScan(false));
 $('btnKlineDeep').onclick = ()=>withPause(()=>klineScan(true));
 $('btnEcu').onclick = ()=>withPause(()=>ecuSearch(false));
@@ -992,6 +1128,7 @@ $('btnClearLog').onclick = ()=>{
 };
 
 if(!navigator.bluetooth) $('warn').hidden = false;
+try{ addExtras(JSON.parse(localStorage.getItem('palette_obd2_extra')||'[]')); }catch(e){}
 buildGrid();
 setExtButtons();
 loadLog();
