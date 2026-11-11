@@ -66,10 +66,14 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <div class="grid" id="grid"></div>
 
+<div class="hint" id="drivingNote">🚗 走行中も記録できます。出発前に接続して、iPhoneは<b>画面をつけたまま</b>（設定→画面表示と明るさ→自動ロック「なし」）・<b>充電しながら</b>ホルダーに固定してください。Bluefyを閉じたり画面が消えると記録が止まります。途中で切れても、30分以内に再接続すれば同じ記録の続きになります。</div>
 <div class="btns">
  <button id="btnDtc" disabled>故障コード</button>
  <button id="btnCopy" class="primary">Claude用コピー</button>
  <button id="btnCsv">CSVコピー</button>
+</div>
+<div class="btns">
+ <button id="btnClearLog">記録を消す</button>
 </div>
 <div id="dtcOut"></div>
 
@@ -86,17 +90,17 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <button class="ext" id="btnReread">再読取で比較</button>
 </div>
 <div class="row">
- <label>対象</label><select id="scanTarget"><option value="7E0|7E8">エンジン (7E0)</option></select>
+ <label>対象</label><select id="scanTarget"><option value="7E0|7E8">エンジン (7E0)</option><option value="7E1|7E9">AT（ミッション） (7E1)</option></select>
 </div>
 <div class="row">
  <label>範囲</label>
  <select id="scanPreset">
+  <option value="21|00|FF">旧方式（KWP） 21 00〜FF ★おすすめ</option>
   <option value="22|F180|F1FF">識別情報 22 F180〜F1FF</option>
   <option value="22|1000|10FF">22 1000〜10FF</option>
   <option value="22|1100|11FF">22 1100〜11FF</option>
   <option value="22|2000|20FF">22 2000〜20FF</option>
   <option value="22|0000|00FF">22 0000〜00FF</option>
-  <option value="21|00|FF">旧方式 21 00〜FF</option>
   <option value="custom">自分で指定</option>
  </select>
 </div>
@@ -138,6 +142,9 @@ const PIDS = [
  {id:'0B', key:'map',      label:'吸気管圧力',     unit:'kPa',  f:a=>a,             dp:0, max:200},
  {id:'06', key:'stft',     label:'燃調 短期',     unit:'%',    f:a=>(a-128)*100/128, dp:1},
  {id:'07', key:'ltft',     label:'燃調 長期',     unit:'%',    f:a=>(a-128)*100/128, dp:1},
+ {id:'0E', key:'timing',   label:'点火時期',       unit:'°',    f:a=>a/2-64,        dp:1},
+ {id:'15', key:'o2',       label:'O2センサー電圧', unit:'V',    f:a=>a/200,         dp:2, max:1},
+ {id:'1F', key:'runtime',  label:'始動後の時間',   unit:'秒',   f:(a,b)=>a*256+b,   dp:0},
 ];
 const VOLT = {key:'volt', label:'バッテリー電圧', unit:'V', dp:1, max:15};
 const ALL = [...PIDS, VOLT];
@@ -310,6 +317,9 @@ function demoTransport(){
    else if(c==='07') r = '47010171';
    else if(c==='0A') r = '4A00';
    else if(c==='0101') r = '41018107E500';
+   else if(c==='010E') r = '410E'+h(64*2+8+Math.random()*6);
+   else if(c==='0115') r = '4115'+h(20+Math.random()*150)+'FF';
+   else if(c==='011F') r = '411F'+h(t,2);
    else if(c==='0121') r = '41210012';
    else if(c==='014D') r = '414D002D';
    else if(c==='0131') r = '41310C80';
@@ -356,14 +366,17 @@ async function loop(){
   if(!running) break;
   const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
   const vv = vr ? parseFloat(vr[1]) : null; show(VOLT, vv); row.volt = vv;
-  samples.push(row); if(samples.length>3600) samples.shift();
+  samples.push(row); if(samples.length>20000) samples.shift();
+  if(samples.length % 15 === 0) saveLog();
   $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
  }
 }
 async function start(kind){
  try{
   transport = kind==='demo' ? demoTransport() : await bleTransport();
-  samples=[]; latest={}; lastDtc=null; startTime=new Date(); $('dtcOut').innerHTML='';
+  const last = samples[samples.length-1];
+  if(!last || Date.now() - last.time > 30*60000){ samples=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
+  latest={};
   buildGrid(); updateButtons(true); setStatus('初期化中…');
   await initElm();
   connected = true; setExtButtons(false);
@@ -378,6 +391,7 @@ async function start(kind){
  }
 }
 function stop(){
+ if(samples.length) saveLog();
  running=false; abortExt=true; connected=false; setExtButtons(false);
  if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve('STOPPED'); }
  if(transport) transport.close();
@@ -464,11 +478,57 @@ function summaryText(){
   L.push(`${p.label}(${p.unit}) | ${fmt(latest[p.key],p)} | ${fmt(Math.min(...vs),p)} | ${fmt(avg,p)} | ${fmt(Math.max(...vs),p)}`);
  }
  L.push('');
- L.push('直近20件:');
- L.push(csvText(samples.slice(-20)));
+ L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
+ L.push('');
+ const ds = downsample(samples, 150);
+ const sec = samples.length>1 ? Math.round((samples[samples.length-1].time-samples[0].time)/1000/ds.length) : 0;
+ L.push(`走行ログ（${ds.length===samples.length?'全件':'約'+sec+'秒ごとの平均'}）:`);
+ L.push(csvText(ds));
  L.push('');
  L.push('このデータから車の状態を診断してください。');
  return L.join('\n');
+}
+const LOGKEY = 'palette_obd2_log';
+function saveLog(){
+ try{
+  const keys = ALL.map(p=>p.key);
+  localStorage.setItem(LOGKEY, JSON.stringify({start:+startTime, protocol, keys,
+   rows: samples.map(r=>[+r.time, ...keys.map(k=>r[k]==null?null:Math.round(r[k]*10)/10)])}));
+ }catch(e){}
+}
+function loadLog(){
+ try{
+  const d = JSON.parse(localStorage.getItem(LOGKEY)||'null');
+  if(!d || !d.rows.length) return;
+  samples = d.rows.map(a=>{ const r={time:new Date(a[0])}; d.keys.forEach((k,i)=>r[k]=a[i+1]); return r; });
+  startTime = new Date(d.start); protocol = d.protocol||'';
+  $('meta').textContent = `保存済みの記録 ${samples.length}件（${startTime.toLocaleString('ja-JP')}〜）`;
+ }catch(e){}
+}
+function tripStats(){
+ let dist=0, idle=0, drive=0, stops=0, warm=null, moving=false;
+ for(let i=1;i<samples.length;i++){
+  const a=samples[i-1], s=samples[i], dt=(s.time-a.time)/1000;
+  if(dt<=0 || dt>30) continue;
+  if(s.speed!=null) dist += s.speed*dt/3600;
+  if(s.speed===0 && s.rpm>300) idle += dt; else if(s.speed>0) drive += dt;
+  if(moving && s.speed===0) stops++;
+  moving = s.speed>0;
+  if(warm==null && s.coolant>=80) warm = (s.time-samples[0].time)/60000;
+ }
+ const m = x=>Math.round(x/60);
+ return [`走行距離（推定）: ${dist.toFixed(1)} km`, `走行時間: ${m(drive)}分 / アイドリング: ${m(idle)}分 / 停止回数: ${stops}回`,
+  `暖機（水温80℃）まで: ${warm==null?'未到達':warm.toFixed(1)+'分'}`];
+}
+function downsample(rows, max){
+ if(rows.length<=max) return rows;
+ const n = Math.ceil(rows.length/max), out=[];
+ for(let i=0;i<rows.length;i+=n){
+  const g = rows.slice(i,i+n), r = {time:g[0].time};
+  for(const p of ALL){ const v=g.map(x=>x[p.key]).filter(x=>x!=null&&!isNaN(x)); r[p.key]= v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; }
+  out.push(r);
+ }
+ return out;
 }
 function csvText(rows){
  const keys = ALL.filter(p=>rows.some(r=>r[p.key]!=null));
@@ -583,7 +643,9 @@ async function ecuSearch(deep){
   const tx = hx(a,3);
   $('scanProg').textContent = `${tx} を確認中…（見つかったECU ${seen.size}個）`;
   await cmd('ATSH'+tx);
-  add(tx, canFrames(await cmd('3E00')));
+  const r1 = canFrames(await cmd('3E00'));
+  for(const [rx,p] of r1) if(p[0]===0x7F && !seen.has(rx)){ const r2 = canFrames(await cmd('3E01')).get(rx); if(r2) extOut(`  └ ${tx} は 3E01 に [${toHex(r2)}]（KWP2000方式の可能性）`); }
+  add(tx, r1);
  }
  ecus = [...seen.values()];
  extOut(`見つかったECU：${ecus.length}個`);
@@ -609,6 +671,11 @@ async function vehicleInfo(){
    if(abortExt) break;
    const d = await readId('22', did, t);
    if(d) extOut(`${t.name} 22 ${did}：${toAscii(d)}  (${toHex(d)})`);
+  }
+  for(const id of ['80','86','87','88','89','8A','8C','90','91','92','94','97','99','9A','9B']){   // 古い方式 KWP2000
+   if(abortExt) break;
+   const d = await readId('1A', id, t);
+   if(d) extOut(`${t.name} 1A ${id}：${toAscii(d)}  (${toHex(d)})`);
   }
  }
 }
@@ -705,11 +772,19 @@ $('btnDemo').onclick = ()=>start('demo');
 $('btnStop').onclick = stop;
 $('btnDtc').onclick = readDtc;
 $('btnCopy').onclick = ()=>copy(summaryText());
-$('btnCsv').onclick = ()=>copy(samples.length ? csvText(samples) : null);
+$('btnCsv').onclick = ()=>copy(samples.length ? csvText(downsample(samples, 600)) : null);
+$('btnClearLog').onclick = ()=>{
+ const b = $('btnClearLog');
+ if(running){ toast('停止してから消してください'); return; }
+ if(b.dataset.sure!=='1'){ b.dataset.sure='1'; b.textContent='本当に消す？'; setTimeout(()=>{ b.dataset.sure=''; b.textContent='記録を消す'; },3000); return; }
+ samples=[]; lastDtc=null; try{ localStorage.removeItem(LOGKEY); }catch(e){}
+ b.dataset.sure=''; b.textContent='記録を消す'; $('meta').textContent=''; toast('記録を消しました');
+};
 
 if(!navigator.bluetooth) $('warn').hidden = false;
 buildGrid();
 setExtButtons();
+loadLog();
 </script>
 </body>
 </html>
