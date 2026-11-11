@@ -66,6 +66,26 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <div class="grid" id="grid"></div>
 
+<h2 class="sec">メーター（ページで計算）</h2>
+<div class="grid" id="meterGrid">
+ <div class="tile"><div class="lbl">ODO</div><div class="val"><span id="m_odo">--</span><small>km</small></div></div>
+ <div class="tile"><div class="lbl">瞬間燃費</div><div class="val"><span id="m_inst">--</span><small>km/L</small></div></div>
+ <div class="tile"><div class="lbl">トリップA</div><div class="val"><span id="m_ta">0.0</span><small>km</small></div><div class="lbl">平均 <span id="m_fa">--</span> km/L</div></div>
+ <div class="tile"><div class="lbl">トリップB（給油ごと）</div><div class="val"><span id="m_tb">0.0</span><small>km</small></div><div class="lbl">平均 <span id="m_fb">--</span> km/L・<span id="m_lb">0.00</span> L</div></div>
+</div>
+<div class="btns">
+ <button id="btnRstA">Aリセット</button>
+ <button id="btnRstB">Bリセット</button>
+ <button id="btnMeterOpt">設定</button>
+</div>
+<div id="meterOpt" hidden>
+ <div class="row"><label>ODO</label><input id="odoInput" type="number" inputmode="decimal" placeholder="メーターのODOを入力（km）"><button id="btnOdo">設定</button></div>
+ <div class="row"><label>給油</label><input id="fuelInput" type="number" inputmode="decimal" placeholder="満タン給油した量（L）"><button id="btnFuel">補正</button></div>
+ <p class="hint">・ODO：メーターの今の数字を1回入れると、あとはページが走った分を足していきます（ページで記録していない間の走行は入りません）。<br>
+ ・燃費は吸気管圧力・回転数・吸気温から計算した<b>推定値</b>です。満タン給油のたびに「給油した量」を入れて「補正」→ Bリセット、を繰り返すと、だんだん正確になります。<br>
+ ・補正係数：<span id="calShow">1.00</span></p>
+</div>
+
 <div class="hint" id="drivingNote">🚗 走行中も記録できます。出発前に接続して、iPhoneは<b>画面をつけたまま</b>（設定→画面表示と明るさ→自動ロック「なし」）・<b>充電しながら</b>ホルダーに固定してください。Bluefyを閉じたり画面が消えると記録が止まります。途中で切れても、30分以内に再接続すれば同じ記録の続きになります。</div>
 <div class="btns">
  <button id="btnDtc" disabled>故障コード</button>
@@ -389,6 +409,7 @@ async function loop(){
   if(!running) break;
   const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
   const vv = vr ? parseFloat(vr[1]) : null; show(VOLT, vv); row.volt = vv;
+  meterStep(row);
   samples.push(row); if(samples.length>20000) samples.shift();
   if(samples.length % 15 === 0) saveLog();
   $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
@@ -502,6 +523,7 @@ function summaryText(){
  }
  L.push('');
  L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
+ L.push(''); L.push(meterText());
  L.push('');
  const ds = downsample(samples, 150);
  const sec = samples.length>1 ? Math.round((samples[samples.length-1].time-samples[0].time)/1000/ds.length) : 0;
@@ -511,6 +533,56 @@ function summaryText(){
  L.push('このデータから車の状態を診断してください。');
  return L.join('\n');
 }
+// ===== メーター：走行距離と燃料をページで積算 =====
+const METERKEY = 'palette_obd2_meter';
+const DISP_L = 0.658, VE = 0.80, AFR = 14.7, FUEL_DENS = 740;   // K6A 658cc、体積効率は仮の値（給油で補正）
+let meter = {odoBase:null, odoAdded:0, ta:{km:0,l:0}, tb:{km:0,l:0}, cal:1, minThr:null};
+let meterPrev = null, instKmL = null;
+function loadMeter(){ try{ Object.assign(meter, JSON.parse(localStorage.getItem(METERKEY)||'{}')); }catch(e){} showMeter(); }
+function saveMeter(){ try{ localStorage.setItem(METERKEY, JSON.stringify(meter)); }catch(e){} }
+// 燃料の流量（L/秒）を推定：スピードデンシティ方式
+function fuelRate(r){
+ if(r.rpm==null || r.map==null || r.rpm<300) return null;
+ if(r.throttle!=null) meter.minThr = meter.minThr==null ? r.throttle : Math.min(meter.minThr, r.throttle);
+ // アクセルを離して惰性で走っている間は燃料カット
+ if(r.throttle!=null && meter.minThr!=null && r.throttle <= meter.minThr+0.8 && r.rpm>1300 && (r.speed||0)>10) return 0;
+ const T = (r.iat==null ? 30 : r.iat) + 273.15;
+ const airKgS = (r.map*1000) * (DISP_L/1000) * VE * (r.rpm/120) / (287.05*T);
+ const trim = 1 + ((r.stft||0)+(r.ltft||0))/100;
+ return airKgS*1000/AFR*trim / FUEL_DENS * meter.cal;     // L/s
+}
+function meterStep(r){
+ const fr = fuelRate(r);
+ if(meterPrev){
+  const dt = (r.time - meterPrev.time)/1000;
+  if(dt>0 && dt<=30){
+   const km = ((r.speed||0)+(meterPrev.speed||0))/2 * dt/3600;
+   const l  = fr==null ? 0 : fr*dt;
+   for(const t of [meter.ta, meter.tb]){ t.km += km; t.l += l; }
+   meter.odoAdded += km;
+  }
+ }
+ instKmL = (fr && r.speed>3) ? (r.speed/3600)/fr : null;
+ meterPrev = r;
+ showMeter();
+ if(samples.length % 15 === 0) saveMeter();
+}
+const kmL = t => t.l>0.02 ? (t.km/t.l).toFixed(1) : '--';
+function showMeter(){
+ $('m_odo').textContent = meter.odoBase==null ? '未設定' : Math.floor(meter.odoBase + meter.odoAdded).toLocaleString();
+ $('m_inst').textContent = instKmL==null ? '--' : Math.min(99.9, instKmL).toFixed(1);
+ $('m_ta').textContent = meter.ta.km.toFixed(1); $('m_fa').textContent = kmL(meter.ta);
+ $('m_tb').textContent = meter.tb.km.toFixed(1); $('m_fb').textContent = kmL(meter.tb); $('m_lb').textContent = meter.tb.l.toFixed(2);
+ $('calShow').textContent = meter.cal.toFixed(2);
+}
+function meterText(){
+ return ['【メーター（ページで計算・燃費は推定）】',
+  `ODO: ${meter.odoBase==null?'未設定':Math.floor(meter.odoBase+meter.odoAdded)+' km'}`,
+  `トリップA: ${meter.ta.km.toFixed(1)} km / 平均燃費 ${kmL(meter.ta)} km/L`,
+  `トリップB: ${meter.tb.km.toFixed(1)} km / 推定燃料 ${meter.tb.l.toFixed(2)} L / 平均燃費 ${kmL(meter.tb)} km/L`,
+  `燃費の補正係数: ${meter.cal.toFixed(2)}`].join('\n');
+}
+
 const LOGKEY = 'palette_obd2_log';
 function saveLog(){
  try{
@@ -879,6 +951,30 @@ if(!navigator.bluetooth) $('warn').hidden = false;
 buildGrid();
 setExtButtons();
 loadLog();
+loadMeter();
+$('btnMeterOpt').onclick = ()=>{ $('meterOpt').hidden = !$('meterOpt').hidden; };
+function twice(btn, label, fn){
+ if(btn.dataset.sure!=='1'){ btn.dataset.sure='1'; btn.textContent='本当に？'; setTimeout(()=>{ btn.dataset.sure=''; btn.textContent=label; },3000); return; }
+ btn.dataset.sure=''; btn.textContent=label; fn();
+}
+$('btnRstA').onclick = ()=>twice($('btnRstA'),'Aリセット',()=>{ meter.ta={km:0,l:0}; saveMeter(); showMeter(); toast('トリップAをリセット'); });
+$('btnRstB').onclick = ()=>twice($('btnRstB'),'Bリセット',()=>{ meter.tb={km:0,l:0}; saveMeter(); showMeter(); toast('トリップBをリセット'); });
+$('btnOdo').onclick = ()=>{
+ const v = parseFloat($('odoInput').value);
+ if(!(v>=0)){ toast('ODOの数字を入れてください'); return; }
+ meter.odoBase = v; meter.odoAdded = 0; saveMeter(); showMeter(); $('odoInput').value=''; toast('ODOを設定しました');
+};
+$('btnFuel').onclick = ()=>{
+ const v = parseFloat($('fuelInput').value);
+ if(!(v>0)){ toast('給油した量（L）を入れてください'); return; }
+ if(meter.tb.l < 1 || meter.tb.km < 20){ toast('トリップBが短すぎます（20km以上走ってから）'); return; }
+ const f = v / meter.tb.l;
+ if(f<0.5 || f>2){ toast('差が大きすぎます。満タン同士か確認してください'); return; }
+ meter.cal *= f;
+ const real = (meter.tb.km / v).toFixed(1);
+ meter.tb = {km:0,l:0}; saveMeter(); showMeter(); $('fuelInput').value='';
+ toast(`実燃費 ${real} km/L。補正してBをリセットしました`);
+};
 </script>
 </body>
 </html>
