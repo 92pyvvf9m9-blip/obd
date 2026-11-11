@@ -216,16 +216,16 @@ function decodeDtc(c){
  const n = parseInt(c[0],16);
  return 'PCBU'[n>>2] + (n&3) + c.slice(1);
 }
-function parseDtc(r){
+function parseDtc(r, pre='43'){
  const ls = lines(r);
  if(ls.some(l=>l.includes('NODATA'))) return [];
  let body = '';
  if(isCAN){
-  const s = ls.join(''); const i = s.indexOf('43');
+  const s = ls.join(''); const i = s.indexOf(pre);
   if(i<0) return null;
-  body = s.slice(i+4); // "43" + 件数バイト を飛ばす
+  body = s.slice(i+4); // 応答コード + 件数バイト を飛ばす
  } else {
-  for(const l of ls) if(l.startsWith('43')) body += l.slice(2);
+  for(const l of ls) if(l.startsWith(pre)) body += l.slice(2);
   if(!body) return null;
  }
  const out = [];
@@ -307,6 +307,18 @@ function demoTransport(){
    else if(c==='0106') r = '4106'+h(128+(Math.random()-.5)*8);
    else if(c==='0107') r = '4107'+h(131);
    else if(c==='03') r = '4301013300';
+   else if(c==='07') r = '47010171';
+   else if(c==='0A') r = '4A00';
+   else if(c==='0101') r = '41018107E500';
+   else if(c==='0121') r = '41210012';
+   else if(c==='014D') r = '414D002D';
+   else if(c==='0131') r = '41310C80';
+   else if(c==='014E') r = '414E0F00';
+   else if(c==='0130') r = '41301E';
+   else if(c==='020200') r = '4202000133';
+   else if(c==='020C00') r = '420C00'+h(2400*4,2);
+   else if(c==='020D00') r = '420D00'+h(52);
+   else if(c==='020500') r = '42050'+'0'+h(86+40);
    else r = 'NO DATA';
    setTimeout(()=>onData(r+'\r\r>'), 40);
   },
@@ -375,13 +387,62 @@ function stop(){
 function updateButtons(on){
  $('btnConnect').disabled=on; $('btnDemo').disabled=on; $('btnStop').disabled=!on; $('btnDtc').disabled=!on;
 }
+function parseFF(r, pid){
+ const s = lines(r).join(''), i = s.indexOf('42'+pid+'00');
+ return i>=0 ? hexBytes(s.slice(i+6)) : null;
+}
+const HIST = [
+ ['21','警告灯が点いてからの走行距離', b=>(b[0]*256+b[1])+' km'],
+ ['4D','警告灯が点いている時間',       b=>(b[0]*256+b[1])+' 分'],
+ ['31','コード消去後の走行距離',       b=>(b[0]*256+b[1])+' km'],
+ ['4E','コード消去後の経過時間',       b=>(b[0]*256+b[1])+' 分'],
+ ['30','コード消去後の暖機回数',       b=>b[0]+' 回'],
+];
+const chips = c => c.map(x=>`<span class="code">${x}</span>`).join('');
 async function readDtc(){
- $('dtcOut').textContent = '読み取り中…';
- const codes = parseDtc(await cmd('03', 8000));
- lastDtc = codes;
- $('dtcOut').innerHTML = codes==null ? '読み取れませんでした' :
-  codes.length ? '故障コード：'+codes.map(c=>`<span class="code">${c}</span>`).join('') + '<br><small style="color:var(--dim)">「Claude用コピー」で貼り付けると意味を調べられます</small>'
-  : '✅ 故障コードはありません';
+ $('btnDtc').disabled = true;
+ $('dtcOut').textContent = '読み取り中…（10〜20秒）';
+ const R = {};
+ R.stored    = parseDtc(await cmd('03', 8000), '43');   // 記録済み（確定）
+ R.pending   = parseDtc(await cmd('07', 8000), '47');   // 保留（1回だけ出た／確定前）
+ R.permanent = parseDtc(await cmd('0A', 8000), '4A');   // 永久（消しても残る記録）
+ const m = parsePid(await cmd('0101'), '01');
+ R.mil = m ? {on: !!(m[0]&0x80), count: m[0]&0x7F} : null;
+ R.hist = [];
+ for(const [pid,label,f] of HIST){ const b = parsePid(await cmd('01'+pid), pid); if(b && b.length>=1) R.hist.push(`${label}：${f(b)}`); }
+ // フリーズフレーム（故障が記録された瞬間の車の状態）
+ R.ff = null;
+ const ffd = parseFF(await cmd('020200', 6000), '02');
+ if(ffd && ffd.length>=2 && (ffd[0]|ffd[1])){
+  R.ff = {code: decodeDtc(hx(ffd[0])+hx(ffd[1])), vals: []};
+  for(const p of PIDS){
+   const b = parseFF(await cmd('02'+p.id+'00', 6000), p.id);
+   if(b && b.length) R.ff.vals.push(`${p.label} ${p.f(b[0],b[1]).toFixed(p.dp)}${p.unit}`);
+  }
+ }
+ lastDtc = R;
+ const sec = (title, list, none) => `<div><b>${title}</b>：${list==null ? '<span style="color:var(--dim)">非対応</span>' : list.length ? chips(list) : none}</div>`;
+ let h = '';
+ if(R.mil) h += `<div>エンジン警告灯：${R.mil.on ? '<span class="code">点灯</span>' : '消灯'}（記録 ${R.mil.count}件）</div>`;
+ h += sec('記録済み', R.stored, 'なし');
+ h += sec('保留（過去に1回出た等）', R.pending, 'なし');
+ h += sec('永久（消去しても残る）', R.permanent, 'なし');
+ if(R.ff) h += `<div><b>発生時の状態</b>（${R.ff.code}）：${R.ff.vals.join(' / ')||'-'}</div>`;
+ if(R.hist.length) h += `<div style="color:var(--dim)">${R.hist.join('<br>')}</div>`;
+ h += '<small style="color:var(--dim)">「Claude用コピー」で貼り付けると意味を調べられます</small>';
+ $('dtcOut').innerHTML = h;
+ $('btnDtc').disabled = !connected;
+}
+function dtcText(){
+ const R = lastDtc;
+ if(!R) return '故障コード: 未読取';
+ const j = l => l==null ? '非対応' : l.length ? l.join(', ') : 'なし';
+ const L = ['故障コード:'];
+ if(R.mil) L.push(`  警告灯: ${R.mil.on?'点灯':'消灯'}（記録${R.mil.count}件）`);
+ L.push(`  記録済み(03): ${j(R.stored)}`, `  保留(07): ${j(R.pending)}`, `  永久(0A): ${j(R.permanent)}`);
+ if(R.ff) L.push(`  発生時の状態(${R.ff.code}): ${R.ff.vals.join(' / ')}`);
+ for(const x of R.hist) L.push('  '+x);
+ return L.join('\n');
 }
 
 // ===== Claudeに渡す用テキスト =====
@@ -393,7 +454,7 @@ function summaryText(){
  L.push('【スズキ パレットSW OBD2データ】');
  L.push(`取得日時: ${startTime.toLocaleString('ja-JP')}`);
  L.push(`計測時間: 約${mins}分（${samples.length}サンプル） / 通信方式: ${protocol||'-'}`);
- L.push('故障コード: ' + (lastDtc==null ? '未読取' : lastDtc.length ? lastDtc.join(', ') : 'なし'));
+ L.push(dtcText());
  L.push('');
  L.push('項目 | 最新 | 最小 | 平均 | 最大');
  for(const p of ALL){
@@ -488,6 +549,16 @@ function setExtButtons(){
  document.querySelectorAll('button.ext').forEach(b=>b.disabled = !connected || extBusy);
  $('btnAbort').disabled = !extBusy;
 }
+function udsStatus(st){
+ const t = [];
+ if(st&0x01) t.push('現在異常');
+ if(st&0x04) t.push('保留');
+ if(st&0x08) t.push('確定・記録');
+ if(st&0x20) t.push('消去後に発生歴あり');
+ if(st&0x80) t.push('警告灯要求');
+ if(!t.length && (st&0x02)) t.push('今回の運転で発生');
+ return t.length ? t.join('・') : '過去の記録';
+}
 function needCAN(){ if(!isCAN){ extOut('※この車の通信方式（'+protoNum+'）ではこの機能は使えません'); return false; } return true; }
 
 async function ecuSearch(deep){
@@ -551,7 +622,7 @@ async function allDtc(){
   await setTarget(t);
   let p = canFrames(await cmd('1902FF',6000)).get(t.rx), codes = [];
   if(p && p[0]===0x59){
-   for(let i=3;i+4<=p.length;i+=4){ const [a,b,c,st]=p.slice(i,i+4); if(a|b|c) codes.push(`${decodeDtc(hx(a)+hx(b))}-${hx(c)}(状態${hx(st)})`); }
+   for(let i=3;i+4<=p.length;i+=4){ const [a,b,c,st]=p.slice(i,i+4); if(a|b|c) codes.push(`${decodeDtc(hx(a)+hx(b))}-${hx(c)}（${udsStatus(st)}）`); }
   } else {
    p = canFrames(await cmd('1802FF00',6000)).get(t.rx);   // 旧方式（KWP）
    if(p && p[0]===0x58){ for(let i=2;i+3<=p.length;i+=3){ const [a,b,st]=p.slice(i,i+3); if(a|b) codes.push(`${decodeDtc(hx(a)+hx(b))}(状態${hx(st)})`); } }
