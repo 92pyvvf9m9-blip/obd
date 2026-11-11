@@ -293,7 +293,8 @@ function demoTransport(){
     if(c==='3E00') r = fr('7E00');
     else if(c==='0100' && hdr==='7DF') r = '7E8064100BE3EB813\r7E906410098180001';
     else if(c==='0904' && hdr==='7DF') r = '7E81014490401333348\r7E82137304B42313130\r7E8223030000000000';
-    else if(c==='1902FF') r = hdr==='7E1' ? fr('5902FF') : fr('5902FF01330008');
+    else if(c==='1800FF00' && hdr==='7E0') r = fr('580101336A');
+    else if(c.startsWith('18')||c==='1902FF'||c==='13') r = fr('7F'+c.slice(0,2)+'12');
     else if(hdr==='7E0' && c==='22F190') r = '7E81014'+'62F190'+'4D4B\r7E82132315331323334\r7E82235363700000000';
     else if(hdr==='7E0' && c==='221001') r = fr('621001'+h(rpm/32));
     else if(hdr==='7E0' && c==='221005') r = fr('621005'+h(Math.min(88,40+t*2)+40));
@@ -550,7 +551,7 @@ let loopPromise = null, extBusy = false, abortExt = false;
 let ecus = [], found = new Map(), extLines = [];
 const ECU_NAMES = {'7E0':'エンジン','7E1':'AT（ミッション）','7E2':'ECU 7E2','7E3':'ECU 7E3'};
 // 読み取り専用コマンドだけ許可（消去04/14、書込2E、作動2F/31、リセット11、セッション10、セキュリティ27 などは不可）
-const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[89A][0-9A-F]*|2[12][0-9A-F]+|3E00)$/;
+const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[3789A][0-9A-F]*|2[12][0-9A-F]+|3E0[01]|1081)$/;
 
 function extOut(t){ extLines.push(t); const o=$('extOut'); o.textContent=extLines.join('\n'); o.scrollTop=o.scrollHeight; }
 const hx = (n,w=2)=>n.toString(16).toUpperCase().padStart(w,'0');
@@ -680,6 +681,26 @@ async function vehicleInfo(){
  }
 }
 
+// 故障コード命令の書き方を順番に試す（どれも読み取りのみ）
+const DTC_TRIES = [
+ ['1902FF',   0x59, 'UDS'],
+ ['1800FF00', 0x58, 'KWP 全部'],
+ ['1802FF00', 0x58, 'KWP 確定'],
+ ['18000000', 0x58, 'KWP 全部(別)'],
+ ['1800FFFF', 0x58, 'KWP 全部(別2)'],
+ ['1802FFFF', 0x58, 'KWP 確定(別)'],
+ ['13',       0x53, 'KWP 旧'],
+ ['03',       0x43, 'OBD 標準'],
+];
+const dtcWorked = {};
+function parseDtcResp(p, kind){
+ const codes = [];
+ if(kind===0x59){ for(let i=3;i+4<=p.length;i+=4){ const [a,b,c,st]=p.slice(i,i+4); if(a|b|c) codes.push(`${decodeDtc(hx(a)+hx(b))}-${hx(c)}（${udsStatus(st)}）`); } }
+ else if(kind===0x58){ for(let i=2;i+3<=p.length;i+=3){ const [a,b,st]=p.slice(i,i+3); if(a|b) codes.push(`${decodeDtc(hx(a)+hx(b))}（状態${hx(st)}${st&0x20?'・記録あり':''}${st&0x40?'・現在':''}）`); } }
+ else if(kind===0x53){ for(let i=2;i+2<=p.length;i+=2){ const [a,b]=p.slice(i,i+2); if(a|b) codes.push(decodeDtc(hx(a)+hx(b))); } }
+ else if(kind===0x43){ for(let i=2;i+2<=p.length;i+=2){ const [a,b]=p.slice(i,i+2); if(a|b) codes.push(decodeDtc(hx(a)+hx(b))); } }
+ return codes;
+}
 async function allDtc(){
  if(!needCAN()) return;
  if(!ecus.length){ extOut('先に「ECU検索」を押してください'); return; }
@@ -687,15 +708,21 @@ async function allDtc(){
  for(const t of ecus){
   if(abortExt) break;
   await setTarget(t);
-  let p = canFrames(await cmd('1902FF',6000)).get(t.rx), codes = [];
-  if(p && p[0]===0x59){
-   for(let i=3;i+4<=p.length;i+=4){ const [a,b,c,st]=p.slice(i,i+4); if(a|b|c) codes.push(`${decodeDtc(hx(a)+hx(b))}-${hx(c)}（${udsStatus(st)}）`); }
-  } else {
-   p = canFrames(await cmd('1802FF00',6000)).get(t.rx);   // 旧方式（KWP）
-   if(p && p[0]===0x58){ for(let i=2;i+3<=p.length;i+=3){ const [a,b,st]=p.slice(i,i+3); if(a|b) codes.push(`${decodeDtc(hx(a)+hx(b))}(状態${hx(st)})`); } }
-   else { extOut(`${t.name}：読めませんでした${p?'（'+toHex(p)+'）':''}`); continue; }
+  const tried = [];
+  let ok = false;
+  const order = dtcWorked[t.tx] ? [dtcWorked[t.tx], ...DTC_TRIES.filter(x=>x!==dtcWorked[t.tx])] : DTC_TRIES;
+  for(const tr of order){
+   if(abortExt) break;
+   const [c, kind, label] = tr;
+   const p = canFrames(await cmd(c, 6000)).get(t.rx);
+   if(p && p[0]===kind){
+    const codes = parseDtcResp(p, kind);
+    extOut(`${t.name}：${codes.length ? codes.join(', ') : '故障コードなし'}  ［${label} ${c} で読取：${toHex(p)}］`);
+    dtcWorked[t.tx] = tr; ok = true; break;
+   }
+   tried.push(`${c}→${p ? toHex(p) : '応答なし'}`);
   }
-  extOut(`${t.name}：${codes.length ? codes.join(', ') : '故障コードなし'}`);
+  if(!ok) extOut(`${t.name}：読めませんでした\n  試した命令：${tried.join(' / ')}`);
  }
 }
 
