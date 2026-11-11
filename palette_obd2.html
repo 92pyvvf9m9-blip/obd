@@ -184,18 +184,29 @@ function toast(t){ const e=$('toast'); e.textContent=t; e.classList.add('show');
 
 // ===== ELM327 との通信 =====
 let rxBuf = '', pending = null, chain = Promise.resolve();
+// エコー（送った命令がそのまま先頭に返ってくる）で、どの命令への返事かを照合する。
+// 遅れて届いた前の命令の返事は捨てるので、命令と返事がずれない。
+let echoMode = false;
 function onData(text){
  rxBuf += text;
- const i = rxBuf.indexOf('>');
- if(i >= 0){
-  const resp = rxBuf.slice(0,i); rxBuf = rxBuf.slice(i+1);
-  if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve(resp); }
+ let i;
+ while((i = rxBuf.indexOf('>')) >= 0){
+  const seg = rxBuf.slice(0,i); rxBuf = rxBuf.slice(i+1);
+  if(!pending){ if(seg.trim()) log('（宛先のない返事を破棄）'+seg.replace(/[\r\n]+/g,' ').trim()); continue; }
+  let resp = seg;
+  if(echoMode){
+   const ls = seg.split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+   const first = (ls[0]||'').replace(/\s/g,'').toUpperCase();
+   if(first !== pending.cmd){ log('（ずれた返事を破棄）'+seg.replace(/[\r\n]+/g,' ').trim()); continue; }
+   resp = ls.slice(1).join('\r');
+  }
+  const p = pending; pending = null; clearTimeout(p.timer); p.resolve(resp);
  }
 }
 function cmd(c, timeout=4000){
  const run = () => new Promise(resolve=>{
   rxBuf = '';
-  pending = {resolve, timer:setTimeout(()=>{ pending=null; resolve('TIMEOUT'); }, timeout)};
+  pending = {resolve, cmd:c.toUpperCase().replace(/\s/g,''), timer:setTimeout(()=>{ pending=null; resolve('TIMEOUT'); }, timeout)};
   log('→ '+c);
   transport.write(c+'\r').catch(e=>{ log('送信エラー '+e); });
  }).then(r=>{ log('← '+r.replace(/[\r\n]+/g,' ').trim()); return r; });
@@ -275,12 +286,14 @@ async function bleTransport(){
 
 // ===== デモ（車がなくても動作確認できる擬似ELM327） =====
 function demoTransport(){
- const t0 = Date.now(); let hdr = '7DF', hon = false;
+ const t0 = Date.now(); let hdr = '7DF', hon = false, echo = true;
  const h =(v,n=1)=>Math.max(0,Math.round(v)).toString(16).toUpperCase().padStart(n*2,'0').slice(-n*2);
  return {
   name:'デモ',
   async write(s){
    const c = s.trim().toUpperCase(); const t=(Date.now()-t0)/1000;
+   const ec = echo ? c+'\r' : '';
+   if(c==='ATE0') echo=false; if(c==='ATE1'||c==='ATZ'||c==='ATWS') echo=true;
    const rpm = 800 + 1400*(1+Math.sin(t/4)) + Math.random()*80;
    const spd = Math.max(0, 30 + 25*Math.sin(t/4 - .5));
    let r = '?';
@@ -301,7 +314,7 @@ function demoTransport(){
     else if(hdr==='7E0' && c==='22100A') r = fr('62100A'+h(142));
     else if(c.startsWith('22')) r = fr('7F2231');
     else r = 'NO DATA';
-    setTimeout(()=>onData(r+'\r\r>'), 30); return;
+    setTimeout(()=>onData(ec+r+'\r\r>'), 30); return;
    }
    if(c.startsWith('AT')) r = c==='ATRV' ? (13.9+Math.random()*.4).toFixed(1)+'V' : c==='ATDPN' ? 'A6' : c==='ATZ' ? 'ELM327 v1.5' : 'OK';
    else if(c==='0100') r = '4100BE3EB813';
@@ -331,7 +344,7 @@ function demoTransport(){
    else if(c==='020D00') r = '420D00'+h(52);
    else if(c==='020500') r = '42050'+'0'+h(86+40);
    else r = 'NO DATA';
-   setTimeout(()=>onData(r+'\r\r>'), 40);
+   setTimeout(()=>onData(ec+r+'\r\r>'), 40);
   },
   close(){}
  };
@@ -340,7 +353,12 @@ function demoTransport(){
 // ===== 初期化と計測ループ =====
 async function initElm(){
  await cmd('ATZ', 6000);
- for(const c of ['ATE0','ATL0','ATS0','ATH0','ATAT1','ATSP0']) await cmd(c);
+ echoMode = false;
+ for(const c of ['ATE1','ATL0','ATS0','ATH0','ATAT1','ATSP0']) await cmd(c);
+ const ti = (await cmd('ATI')).split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+ echoMode = (ti[0]||'').replace(/\s/g,'').toUpperCase()==='ATI';
+ log('返事の照合: '+(echoMode?'ON':'OFF（アダプターがエコー非対応）'));
+ if(!echoMode){ await cmd('ATE0'); }
  setStatus('車両と通信中…');
  const r = await cmd('0100', 12000);
  const b = parsePid(r,'00');
@@ -597,10 +615,17 @@ async function withPause(fn){
  const was = running; running = false;
  if(loopPromise) await loopPromise;
  setStatus('探索中…');
+ await cmd('ATI');
  try{ await fn(); }catch(e){ extOut('エラー: '+(e.message||e)); }
  finally{
   if(connected){
-   try{ await cmd('ATWS',5000); for(const c of ['ATE0','ATL0','ATS0','ATH0','ATAT1','ATSP'+protoNum]) await cmd(c); }catch(e){}
+   try{
+    const em = echoMode; echoMode = false;           // リセット直後は照合せずに受ける
+    await cmd('ATWS',5000);
+    for(const c of [em?'ATE1':'ATE0','ATL0','ATS0','ATH0','ATAT1','ATSP'+protoNum]) await cmd(c);
+    echoMode = em;
+    await cmd('ATI');                                  // ここで余った返事を掃除
+   }catch(e){}
   }
   extBusy = false; $('scanProg').textContent=''; setExtButtons(false);
   if(was && connected){ running = true; setStatus(transport.name==='デモ'?'デモ実行中':'接続中','on'); loopPromise = loop(); }
