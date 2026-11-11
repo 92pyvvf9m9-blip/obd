@@ -79,6 +79,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
+<button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
  <button class="ext" id="btnEcu">ECU検索</button>
  <button class="ext" id="btnEcuDeep">深くECU検索</button>
@@ -307,6 +308,9 @@ function demoTransport(){
     else if(c==='0100' && hdr==='7DF') r = '7E8064100BE3EB813\r7E906410098180001';
     else if(c==='0904' && hdr==='7DF') r = '7E81014490401333348\r7E82137304B42313130\r7E8223030000000000';
     else if(c==='1800FF00' && hdr==='7E0') r = fr('580101336A');
+    else if(c==='1081') r = fr(hdr==='7E1' ? '5081' : '7F1011');
+    else if(c==='1003') r = fr('7F1011');
+    else if(c==='1802FFFF' && hdr==='7E1') r = fr('58010700A0');
     else if(c.startsWith('18')||c==='1902FF'||c==='13') r = fr('7F'+c.slice(0,2)+'12');
     else if(hdr==='7E0' && c==='22F190') r = '7E81014'+'62F190'+'4D4B\r7E82132315331323334\r7E82235363700000000';
     else if(hdr==='7E0' && c==='221001') r = fr('621001'+h(rpm/32));
@@ -569,7 +573,7 @@ let loopPromise = null, extBusy = false, abortExt = false;
 let ecus = [], found = new Map(), extLines = [];
 const ECU_NAMES = {'7E0':'エンジン','7E1':'AT（ミッション）','7E2':'ECU 7E2','7E3':'ECU 7E3'};
 // 読み取り専用コマンドだけ許可（消去04/14、書込2E、作動2F/31、リセット11、セッション10、セキュリティ27 などは不可）
-const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[3789A][0-9A-F]*|2[12][0-9A-F]+|3E0[01]|1081)$/;
+const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[3789A][0-9A-F]*|2[12][0-9A-F]+|3E0[01]|1081|1003)$/;
 
 function extOut(t){ extLines.push(t); const o=$('extOut'); o.textContent=extLines.join('\n'); o.scrollTop=o.scrollHeight; }
 const hx = (n,w=2)=>n.toString(16).toUpperCase().padStart(w,'0');
@@ -804,7 +808,45 @@ async function sendCustom(){
  }
 }
 
+// ===== 故障履歴の徹底捜索：読み取り命令の書き方を総当たり =====
+const NRC = {'10':'拒否','11':'その命令は無い','12':'書き方が違う','13':'長さが違う','22':'今は条件が合わない','31':'範囲外','33':'鍵が必要','78':'処理中','7E':'今のモードでは不可','7F':'今のモードでは不可'};
+async function hunt(){
+ if(!needCAN()) return;
+ const targets = ecus.length ? ecus : [{tx:'7E0',rx:'7E8',name:'エンジン'},{tx:'7E1',rx:'7E9',name:'AT（ミッション）'}];
+ const cmds = [];
+ for(const st of ['00','01','02','03','04','08','FF']) for(const g of ['FF00','FFFF','0000','8000','C000','4000']) cmds.push('18'+st+g);   // KWP2000 状態別
+ cmds.push('17FF00','170000','1700','13','1300','1301','1302');                                                          // KWP 旧来の読み方
+ for(const sf of ['01FF','02FF','0208','0204','0A','0F','1308','0F08','1702FF','0B','0C','0D','0E']) cmds.push('19'+sf);   // UDS
+ extOut('--- 故障履歴の徹底捜索 ---');
+ for(const t of targets){
+  if(abortExt) break;
+  extOut(`■ ${t.name}（${t.tx}）`);
+  for(const session of [null, '1081', '1003']){
+   if(abortExt) break;
+   await setTarget(t);
+   if(session){ const sp = canFrames(await cmd(session, 3000)).get(t.rx); extOut(`  診断モード切替 ${session}：${sp ? toHex(sp) : '応答なし'}`); if(!sp || sp[0]===0x7F) continue; }
+   const ng = {};
+   let hits = 0;
+   for(const c of cmds){
+    if(abortExt) break;
+    $('scanProg').textContent = `${t.name} ${session||'通常'} ${c} を試し中…`;
+    const p = canFrames(await cmd(c, 4000)).get(t.rx);
+    if(!p){ (ng['応答なし'] ||= []).push(c); continue; }
+    if(p[0]===0x7F){ const k = `${hx(p[2]||0)} ${NRC[hx(p[2]||0)]||''}`; (ng[k] ||= []).push(c); continue; }
+    hits++;
+    const kind = p[0];
+    const codes = parseDtcResp(p, kind);
+    extOut(`  ✅ ${c} → ${toHex(p)}${codes.length ? '  ⇒ '+codes.join(', ') : ''}`);
+   }
+   for(const [k,v] of Object.entries(ng)) extOut(`  ✕ ${k}：${v.length}件（例 ${v.slice(0,3).join(', ')}）`);
+   if(hits) break;   // 読めたらこのECUは終わり
+  }
+ }
+ extOut('捜索おわり');
+}
+
 // ===== ボタン =====
+$('btnHunt').onclick = ()=>withPause(hunt);
 $('btnEcu').onclick = ()=>withPause(()=>ecuSearch(false));
 $('btnEcuDeep').onclick = ()=>withPause(()=>ecuSearch(true));
 $('btnInfo').onclick = ()=>withPause(vehicleInfo);
