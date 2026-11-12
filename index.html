@@ -316,8 +316,10 @@ function parseDtc(r, pre='43'){
 }
 
 // ===== Bluetooth (BLE) 接続 =====
-async function bleTransport(){
- const device = await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
+let bleDevice = null, userStop = false, reconnecting = false, lastKind = 'ble';
+async function bleTransport(known){
+ const device = known || await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
+ bleDevice = device;
  setStatus('接続中…');
  const server = await device.gatt.connect();
  let nChar=null, wChar=null;
@@ -332,7 +334,7 @@ async function bleTransport(){
  await nChar.startNotifications();
  const dec = new TextDecoder();
  nChar.addEventListener('characteristicvaluechanged', e=>onData(dec.decode(e.target.value)));
- device.addEventListener('gattserverdisconnected', ()=>{ running=false; connected=false; abortExt=true; setStatus('切断されました','err'); updateButtons(false); setExtButtons(false); });
+ if(!device._palHooked){ device._palHooked = true; device.addEventListener('gattserverdisconnected', onLinkLost); }
  const enc = new TextEncoder();
  return {
   name: device.name || 'OBD2',
@@ -510,7 +512,44 @@ function detect(row){
   addEvent(t,'jump',`停車中に回転が急変 ${Math.round(prev.rpm)}→${Math.round(row.rpm)}rpm`);
  if(row.volt!=null && row.volt<12.5 && row.rpm>500) addEvent(t,'volt',`電圧低下 ${row.volt}V`);
 }
+// ===== 切断されたら自動で再接続 =====
+let reconnectFactory = () => bleTransport(bleDevice);
+function onLinkLost(){
+ const was = running || connected;
+ running=false; connected=false; abortExt=true; setExtButtons(false);
+ if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve('LINKLOST'); }
+ if(samples.length) saveLog();
+ if(userStop || !was){ setStatus('切断されました','err'); updateButtons(false); return; }
+ try{ addEvent(Date.now(),'link','Bluetooth切断'); }catch(e){}
+ autoReconnect();
+}
+async function autoReconnect(){
+ if(reconnecting || userStop) return;
+ reconnecting = true;
+ if(loopPromise) { try{ await loopPromise; }catch(e){} }
+ for(let i=1; i<=60 && !userStop; i++){
+  setStatus(`再接続中…(${i})`,'err');
+  try{
+   transport = await reconnectFactory();
+   latest = {}; await initElm();
+   connected = true; abortExt = false; setExtButtons(false);
+   running = true; cycle = 0; setStatus('接続中（再接続）','on');
+   try{ addEvent(Date.now(),'relink','再接続しました'); }catch(e){}
+   try{ await navigator.wakeLock?.request('screen'); }catch(e){}
+   loopPromise = loop();
+   reconnecting = false; return;
+  }catch(e){ log('再接続失敗: '+(e.message||e)); }
+  await new Promise(r=>setTimeout(r, 3000));
+ }
+ reconnecting = false;
+ if(!userStop){ setStatus('切断されました','err'); updateButtons(false); toast('再接続できませんでした。「接続」を押してください'); }
+}
+document.addEventListener('visibilitychange', ()=>{
+ if(document.visibilityState==='visible' && bleDevice && !connected && !userStop && !reconnecting && lastKind==='ble') autoReconnect();
+});
+
 async function start(kind){
+ userStop = false; lastKind = kind;
  try{
   transport = kind==='demo' ? demoTransport() : await bleTransport();
   const last = samples[samples.length-1];
@@ -531,6 +570,7 @@ async function start(kind){
  }
 }
 function stop(){
+ userStop = true;
  if(samples.length) saveLog();
  running=false; abortExt=true; connected=false; setExtButtons(false);
  if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve('STOPPED'); }
