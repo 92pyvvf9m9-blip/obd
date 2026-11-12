@@ -45,6 +45,8 @@ select,input{flex:1;min-width:0;background:var(--panel);color:var(--text);border
 #customCmd{font-family:ui-monospace,monospace}
 .row button{flex:none;padding:11px 16px}
 #extOut{color:var(--text);font-size:12px;max-height:320px;min-height:40px}
+[hidden]{display:none!important}
+#scanProg.big{font-size:19px;font-weight:700;color:var(--accent);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:12px;position:sticky;top:8px;z-index:5}
 #meta{font-size:12px;color:var(--dim);margin:2px 0 8px}
 </style>
 </head>
@@ -103,6 +105,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
+<button class="ext primary" id="btnRaw" style="width:100%;margin:6px 0">🧪 独自データの解読用記録（約2分・画面の指示どおりに操作）</button>
 <button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
  <button class="ext" id="btnKline">7番ピン機器を探す</button>
@@ -378,6 +381,9 @@ function demoTransport(){
     else if(hdr==='7E0' && c==='221001') r = fr('621001'+h(rpm/32));
     else if(hdr==='7E0' && c==='221005') r = fr('621005'+h(Math.min(88,40+t*2)+40));
     else if(hdr==='7E0' && c==='22100A') r = fr('62100A'+h(142));
+    else if(c==='2100' && hdr==='7E0') r = '7E8100A6100'+h(rpm/32)+'FF7D\r7E821'+h(t)+'5A10FF00000000';
+    else if(c==='2104' && hdr==='7E1') r = fr('6104'+h(60+t/10)+'1A78');
+    else if(/^01[0-9A-F]{2}$/.test(c) && hdr==='7E0') r = fr('41'+c.slice(2)+h(rpm/40)+'10');
     else if(c==='2101' && hdr==='7E0') r = fr('6101'+h(rpm/32)+'5A10');
     else if(c==='2105' && hdr==='7E1') r = fr('6105'+h(60+t/10)+'00');
     else if(c==='1A90' && hdr==='7E0') r = fr('5A90'+'4D4B3231');
@@ -1058,6 +1064,40 @@ async function klineScan(deep){
  extOut(`7番ピンで見つかった機器：${found}個${found?'':'（この車は7番ピンを使っていないか、アダプターが対応していない可能性）'}`);
 }
 
+// ===== 独自データの解読用記録：標準の値と独自データの生バイトを並べて記録する =====
+async function rawRec(){
+ if(!needCAN()) return;
+ const E={tx:'7E0',rx:'7E8',name:'エンジン'}, A={tx:'7E1',rx:'7E9',name:'AT'};
+ const hexs = d => d ? d.map(x=>hx(x)).join('') : '';
+ const sw = async t => { await cmd('ATSH'+t.tx); await cmd('ATCRA'+t.rx); };
+ const HIST = ['27','28','30','31','35','FE'];
+ const snap = async () => { await sw(E); const o={}; for(const id of HIST){ o[id] = hexs(await readId('21',id,E)); } return o; };
+ const steps = [[0,'そのままアイドリング（P・エアコンOFF・何も触らない）'],[20,'エアコンをON'],[40,'エアコンをOFF'],[55,'ブレーキを強く踏んで R に入れる'],[65,'N に入れる'],[72,'D に入れる（ブレーキは踏んだまま）'],[82,'P に戻す'],[92,'空ぶかし：2000rpmくらいで保つ'],[104,'アクセルを離す'],[112,'ライトON ＋ リアデフォッガーON'],[124,'全部OFF・そのまま待つ']];
+ extOut('=== 独自データの解読用記録 ===');
+ extOut('形式: 秒|手順|STD(回転,車速,水温,吸気温,吸気圧,スロットル,負荷,点火,短期燃調 の生16進)|エンジン21 00|AT 21 04');
+ await cmd('ATH1'); await cmd('ATST19');
+ const before = await snap();
+ const P = $('scanProg'); P.classList.add('big'); try{ P.scrollIntoView({block:'start'}); }catch(e){}
+ const t0 = Date.now(); let last = -1;
+ try{
+  while(!abortExt){
+   const el = (Date.now()-t0)/1000; if(el>136) break;
+   const st = steps.filter(x=>x[0]<=el).pop();
+   P.textContent = `【${Math.floor(el)}秒／136秒】今やること → ${st[1]}`;
+   if(st[0]!==last){ last = st[0]; toast(st[1]); }
+   await sw(E);
+   const std = []; for(const p of ['0C','0D','05','0F','0B','11','04','0E','06']) std.push(hexs(await readId('01',p,E)) || '-');
+   const e = hexs(await readId('21','00',E));
+   await sw(A);
+   const a = hexs(await readId('21','04',A));
+   extOut(`${el.toFixed(1)}|${st[0]}|${std.join(',')}|${e}|${a}`);
+  }
+  const after = await snap();
+  for(const id of HIST) extOut(`エンジン 21 ${id}：${before[id]===after[id] ? '変化なし（保存された記録の可能性）' : '変化あり ' + before[id] + ' → ' + after[id]}`);
+ } finally { P.classList.remove('big'); }
+ extOut('=== 記録おわり：「探索結果コピー」で貼ってください ===');
+}
+
 // ===== 故障履歴の徹底捜索：読み取り命令の書き方を総当たり =====
 const NRC = {'10':'拒否','11':'その命令は無い','12':'書き方が違う','13':'長さが違う','22':'今は条件が合わない','31':'範囲外','33':'鍵が必要','78':'処理中','7E':'今のモードでは不可','7F':'今のモードでは不可'};
 async function hunt(){
@@ -1098,6 +1138,7 @@ async function hunt(){
 // ===== ボタン =====
 $('btnHunt').onclick = ()=>withPause(hunt);
 $('btnAuto').onclick = ()=>withPause(fullAuto);
+$('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
 $('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（違和感あり）'); saveLog(); };
 document.addEventListener('visibilitychange', async ()=>{ if(document.visibilityState==='visible' && running){ try{ await navigator.wakeLock?.request('screen'); }catch(e){} } });
 $('btnKline').onclick = ()=>withPause(()=>klineScan(false));
