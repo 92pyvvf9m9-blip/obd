@@ -346,7 +346,8 @@ let bleDevice = null, userStop = false, reconnecting = false, lastKind = 'ble';
 async function bleTransport(known){
  const device = known || await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
  bleDevice = device;
- setStatus('接続中…');
+ try{ localStorage.setItem('palette_obd2_dev', JSON.stringify({id:device.id, name:device.name||''})); }catch(e){}
+ setStatus(autoRunning ? '自動接続中…' : '接続中…');
  const server = await device.gatt.connect();
  let nChar=null, wChar=null;
  for(const u of SERVICES){
@@ -512,6 +513,7 @@ async function loop(){
   if(row.rpm==null && row.speed==null){ if(++misses % 5 === 0) await cmd('ATI'); continue; }   // 読めなかった回は記録しない
   misses = 0;
   learnFwd(row, samples[samples.length-1]);
+  updAcc(row, samples[samples.length-1]);
   row.slope = slopeNow(); show(SLOPE, row.slope);
   detect(row);
   meterStep(row);
@@ -576,20 +578,25 @@ document.addEventListener('visibilitychange', ()=>{
  if(document.visibilityState==='visible' && bleDevice && !connected && !userStop && !reconnecting && lastKind==='ble') autoReconnect();
 });
 
+// 接続できた後の共通処理
+async function afterTransport(kind){
+ const last = samples[samples.length-1];
+ if(!last || Date.now() - last.time > 30*60000){ samples=[]; events=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
+ latest={};
+ buildGrid(); updateButtons(true); setStatus('初期化中…');
+ await initElm();
+ connected = true; setExtButtons(false);
+ running = true; setStatus(kind==='demo'?'デモ実行中':'接続中','on');
+ try{ await navigator.wakeLock?.request('screen'); }catch(e){}
+ cycle = 0;
+ loopPromise = loop();
+}
 async function start(kind){
+ autoAbort = true;
  userStop = false; lastKind = kind;
  try{
   transport = kind==='demo' ? demoTransport() : await bleTransport();
-  const last = samples[samples.length-1];
-  if(!last || Date.now() - last.time > 30*60000){ samples=[]; events=[]; startTime=new Date(); lastDtc=null; $('dtcOut').innerHTML=''; }
-  latest={};
-  buildGrid(); updateButtons(true); setStatus('初期化中…');
-  await initElm();
-  connected = true; setExtButtons(false);
-  running = true; setStatus(kind==='demo'?'デモ実行中':'接続中','on');
-  try{ await navigator.wakeLock?.request('screen'); }catch(e){}
-  cycle = 0;
-  loopPromise = loop();
+  await afterTransport(kind);
  }catch(e){
   log('エラー: '+(e.message||e));
   setStatus(e.name==='NotFoundError'?'キャンセル':'エラー','err');
@@ -597,8 +604,49 @@ async function start(kind){
   stop();
  }
 }
+// ===== 自動接続：前回つないだアダプターを覚えておき、ページを開いたら探してつなぐ =====
+let autoAbort = false, autoRunning = false;
+const savedDev = ()=>{ try{ return JSON.parse(localStorage.getItem('palette_obd2_dev')||'null'); }catch(e){ return null; } };
+async function autoConnectOnLoad(){
+ const sv = savedDev();
+ if(!sv) return;
+ $('btnConnect').textContent = '接続';
+ if(typeof navigator==='undefined' || !navigator.bluetooth || !navigator.bluetooth.getDevices){
+  log('このブラウザは「覚えた機器への自動接続」に未対応');
+  $('meta').textContent = `前回のアダプター：${sv.name||'不明'}（「接続」を押して選んでください）`;
+  return;
+ }
+ let devs = [];
+ try{ devs = await navigator.bluetooth.getDevices(); }catch(e){ log('getDevices: '+(e.message||e)); return; }
+ const dev = devs.find(d=>d.id===sv.id) || devs.find(d=>sv.name && d.name===sv.name);
+ if(!dev){ log('覚えたアダプターが見つかりません（「接続」から選び直してください）'); return; }
+ autoLoop(dev);
+}
+async function autoLoop(dev){
+ if(autoRunning) return;
+ autoRunning = true; autoAbort = false; userStop = false; lastKind = 'ble';
+ for(let i=1; i<=150 && !autoAbort && !connected; i++){
+  setStatus(`自動接続中…(${i})`);
+  if(i===1) $('meta').textContent = `「${dev.name||'OBD2'}」を探しています。エンジン（またはACC）をONにしてください`;
+  try{
+   transport = await bleTransport(dev);
+   await afterTransport('ble');
+   toast('自動接続しました');
+   break;
+  }catch(e){
+   log('自動接続: '+(e.message||e));
+   running = false; connected = false;
+   try{ transport && transport.close(); }catch(e2){}
+   updateButtons(false);
+  }
+  await new Promise(r=>setTimeout(r, 4000));
+ }
+ autoRunning = false;
+ if(!connected && !autoAbort){ setStatus('未接続'); }
+}
+
 function stop(){
- userStop = true;
+ userStop = true; autoAbort = true;
  if(samples.length) saveLog();
  running=false; abortExt=true; connected=false; setExtButtons(false);
  if(pending){ const p=pending; pending=null; clearTimeout(p.timer); p.resolve('STOPPED'); }
@@ -1248,7 +1296,7 @@ loadMeter();
 
 // ===== 傾きセンサー（iPhoneの加速度センサーを水平器として使う） =====
 const TILTKEY = 'palette_obd2_tilt';
-const tilt = {listening:false, on:false, g0:null, fwd:null, fwdN:0, fwdSum:[0,0,0], lpS:null, lpF:null};
+const tilt = {acc:0, accT:0, listening:false, on:false, g0:null, fwd:null, fwdN:0, fwdSum:[0,0,0], lpS:null, lpF:null};
 try{ const d = JSON.parse(localStorage.getItem(TILTKEY)||'null'); if(d){ tilt.g0=d.g0; tilt.fwd=d.fwd; tilt.fwdN=d.fwdN||0; tilt.fwdSum=d.fwdSum||[0,0,0]; } }catch(e){}
 const vsub=(a,b)=>a.map((x,i)=>x-b[i]), vdot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0), vnorm=a=>Math.sqrt(vdot(a,a));
 function saveTilt(){ try{ localStorage.setItem(TILTKEY, JSON.stringify({g0:tilt.g0, fwd:tilt.fwd, fwdN:tilt.fwdN, fwdSum:tilt.fwdSum})); }catch(e){} }
@@ -1261,10 +1309,18 @@ function onMotion(e){
 }
 function tiltAngle(){ if(!tilt.g0 || !tilt.lpS) return null; const c = vdot(tilt.g0,tilt.lpS)/(vnorm(tilt.g0)*vnorm(tilt.lpS)); return Math.acos(Math.max(-1,Math.min(1,c)))*180/Math.PI; }
 // 上り坂は「前向きに加速している」のと同じ向きにセンサーが傾くので、発進時の加速の向きを「前」として覚える
+// 加速・ブレーキ中はセンサーが「坂」と区別できないので、車速の変化（OBD）から加減速ぶんを差し引く
 function slopeNow(){
  if(!tilt.on || !tilt.g0 || !tilt.fwd || !tilt.lpS) return null;
  const d = vsub(tilt.lpS, tilt.g0);
- return Math.asin(Math.max(-1,Math.min(1, vdot(d,tilt.fwd)/9.81)))*180/Math.PI;
+ const acc = Date.now() - tilt.accT < 3000 ? tilt.acc : 0;
+ return Math.asin(Math.max(-1,Math.min(1, (vdot(d,tilt.fwd) - acc)/9.81)))*180/Math.PI;
+}
+function updAcc(row, prev){
+ if(!prev || row.speed==null || prev.speed==null) return;
+ const dt = (row.time-prev.time)/1000; if(dt<=0 || dt>3) return;
+ const a = (row.speed-prev.speed)/3.6/dt;
+ tilt.acc = tilt.acc*0.3 + a*0.7; tilt.accT = Date.now();
 }
 function learnFwd(row, prev){
  if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null) return;
@@ -1295,6 +1351,7 @@ async function tiltOnClick(){
   }
  }catch(e){ log('傾きセンサー許可: '+(e.message||e)); }
  if(!tilt.listening && typeof window!=='undefined'){ window.addEventListener('devicemotion', onMotion); tilt.listening = true; }
+ try{ localStorage.setItem('palette_obd2_tilton','1'); }catch(e){}
  setTimeout(()=>{ toast(tilt.on ? '傾きセンサーON' : 'このブラウザでは傾きセンサーが使えないようです'); }, 2000);
 }
 function levelClick(){
@@ -1306,6 +1363,14 @@ function levelClick(){
  tilt.g0 = now; saveTilt(); toast('ここを水平（0°）にしました');
 }
 $('btnTilt').onclick = tiltOnClick;
+try{
+ if(localStorage.getItem('palette_obd2_tilton')==='1' && typeof window!=='undefined'){
+  window.addEventListener('devicemotion', onMotion); tilt.listening = true;          // 許可が残っていればこれだけで動く
+  const once = ()=>{ document.removeEventListener('touchend', once, true); document.removeEventListener('click', once, true); if(!tilt.on) tiltOnClick(); };
+  document.addEventListener('touchend', once, true); document.addEventListener('click', once, true);   // 許可が必要なら最初のタップで
+ }
+}catch(e){}
+autoConnectOnLoad();
 $('btnLevel').onclick = levelClick;
 setInterval(()=>{ $('tiltOut').textContent = tiltText(); if(!running && tilt.on) show(SLOPE, slopeNow()); }, 500);
 
