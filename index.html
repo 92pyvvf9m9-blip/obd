@@ -232,10 +232,18 @@ const EXTRA = [
 ];
 const FAST = new Set(['0C','0D','0B','11','06','0E','04','45','4C','49']);   // 毎回読む（速く変わる）項目
 const SLOPE = {key:'slope', label:'傾き(+上り/-下り)', unit:'°', dp:1};
-let ALL = [...PIDS, VOLT, SLOPE];
+const VIB   = {key:'vib',   label:'車体の揺れ(iPhone)', unit:'m/s²', dp:2};
+// スズキ独自データ（2026/11/14の解読用記録で判明）
+const SUZUKI = [
+ {key:'isc',  label:'アイドル空気補正(ISC)', unit:'',    dp:0, src:'E', f:d=>d.length>34 ? d[34] : null},
+ {key:'atin', label:'AT入力回転',           unit:'rpm', dp:0, src:'A', f:d=>d.length>1 ? ((d[0]<<8)|d[1])/4 : null},
+ {key:'atf',  label:'CVT油温(候補)',         unit:'℃',  dp:0, src:'A', f:d=>d.length>7 ? ((d[6]<<8)|d[7]) : null},
+ {key:'gear', label:'ギア接続(1=R/D)',       unit:'',    dp:0, src:'A', f:d=>d.length>99 ? (d[99] < 150 ? 1 : 0) : null},
+];
+let ALL = [...PIDS, VOLT, SLOPE, VIB, ...SUZUKI];
 function addExtras(ids){
  for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
- ALL = [...PIDS, VOLT, SLOPE];
+ ALL = [...PIDS, VOLT, SLOPE, VIB, ...SUZUKI];
  try{ localStorage.setItem('palette_obd2_extra', JSON.stringify(PIDS.map(p=>p.id))); }catch(e){}
 }
 
@@ -508,8 +516,11 @@ async function loop(){
   if(slowTurn){
    const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
    show(VOLT, vr ? parseFloat(vr[1]) : null);
+   if(isCAN && running && suzukiOK) await readSuzuki();
   }
   row.volt = latest.volt;
+  for(const p of SUZUKI) row[p.key] = latest[p.key];
+  row.vib = vibTake(); show(VIB, row.vib);
   if(row.rpm==null && row.speed==null){ if(++misses % 5 === 0) await cmd('ATI'); continue; }   // 読めなかった回は記録しない
   misses = 0;
   learnFwd(row, samples[samples.length-1]);
@@ -522,6 +533,22 @@ async function loop(){
   $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
  }
 }
+// ===== スズキ独自データを読む（5回に1回） =====
+let suzukiOK = true, suzukiFail = 0;
+async function readSuzuki(){
+ try{
+  await cmd('ATH1');
+  const got = {};
+  for(const [src, tx, rx, id] of [['E','7E0','7E8','00'], ['A','7E1','7E9','04']]){
+   await cmd('ATSH'+tx); await cmd('ATCRA'+rx);
+   got[src] = await readId('21', id, {tx, rx});
+  }
+  for(const p of SUZUKI){ const d = got[p.src]; show(p, d ? p.f(d) : null); }
+  if(!got.E && !got.A){ if(++suzukiFail >= 3){ suzukiOK = false; log('独自データが読めないので停止'); } } else suzukiFail = 0;
+ }catch(e){ log('独自データ: '+(e.message||e)); }
+ finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA'); }
+}
+
 // ===== 異変の自動検出 =====
 let events = [];
 const lastEv = {};
@@ -1202,7 +1229,9 @@ async function rawRec(){
    P.textContent = `【${Math.floor(el)}秒／136秒】今やること → ${st[1]}`;
    if(st[0]!==last){ last = st[0]; toast(st[1]); }
    await sw(E);
+   await cmd('ATSH7DF'); await cmd('ATCRA7E8');
    const std = []; for(const p of ['0C','0D','05','0F','0B','11','04','0E','06']) std.push(hexs(await readId('01',p,E)) || '-');
+   await cmd('ATCRA');
    const e = hexs(await readId('21','00',E));
    await sw(A);
    const a = hexs(await readId('21','04',A));
@@ -1296,7 +1325,7 @@ loadMeter();
 
 // ===== 傾きセンサー（iPhoneの加速度センサーを水平器として使う） =====
 const TILTKEY = 'palette_obd2_tilt';
-const tilt = {acc:0, accT:0, listening:false, on:false, g0:null, fwd:null, fwdN:0, fwdSum:[0,0,0], lpS:null, lpF:null};
+const tilt = {vibSum:0, vibN:0, vibPk:0, acc:0, accT:0, listening:false, on:false, g0:null, fwd:null, fwdN:0, fwdSum:[0,0,0], lpS:null, lpF:null};
 try{ const d = JSON.parse(localStorage.getItem(TILTKEY)||'null'); if(d){ tilt.g0=d.g0; tilt.fwd=d.fwd; tilt.fwdN=d.fwdN||0; tilt.fwdSum=d.fwdSum||[0,0,0]; } }catch(e){}
 const vsub=(a,b)=>a.map((x,i)=>x-b[i]), vdot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0), vnorm=a=>Math.sqrt(vdot(a,a));
 function saveTilt(){ try{ localStorage.setItem(TILTKEY, JSON.stringify({g0:tilt.g0, fwd:tilt.fwd, fwdN:tilt.fwdN, fwdSum:tilt.fwdSum})); }catch(e){} }
@@ -1306,12 +1335,20 @@ function onMotion(e){
  tilt.lpS = tilt.lpS ? tilt.lpS.map((x,i)=>x+0.03*(v[i]-x)) : v.slice();   // ゆっくり（約0.5秒）
  tilt.lpF = tilt.lpF ? tilt.lpF.map((x,i)=>x+0.25*(v[i]-x)) : v.slice();   // 速め（加速の向き学習用）
  tilt.on = true;
+ const hp = Math.sqrt(v.reduce((s,x,i)=>s+(x-tilt.lpS[i])**2,0));
+ tilt.vibSum += hp*hp; tilt.vibN++; if(hp > tilt.vibPk) tilt.vibPk = hp;
 }
+function vibTake(){ if(!tilt.vibN) return null; const r = Math.sqrt(tilt.vibSum/tilt.vibN); tilt.vibSum=0; tilt.vibN=0; tilt.vibPk=0; return r; }
 function tiltAngle(){ if(!tilt.g0 || !tilt.lpS) return null; const c = vdot(tilt.g0,tilt.lpS)/(vnorm(tilt.g0)*vnorm(tilt.lpS)); return Math.acos(Math.max(-1,Math.min(1,c)))*180/Math.PI; }
 // 上り坂は「前向きに加速している」のと同じ向きにセンサーが傾くので、発進時の加速の向きを「前」として覚える
 // 加速・ブレーキ中はセンサーが「坂」と区別できないので、車速の変化（OBD）から加減速ぶんを差し引く
 function slopeNow(){
  if(!tilt.on || !tilt.g0 || !tilt.fwd || !tilt.lpS) return null;
+ if(tiltAngle() > 25){                                  // ホルダーがずれた：でたらめな値は記録しない
+  if(!tilt.movedWarned){ tilt.movedWarned = true; try{ addEvent(Date.now(),'holder','iPhoneの角度がずれた（傾きの記録を停止）'); }catch(e){} }
+  return null;
+ }
+ tilt.movedWarned = false;
  const d = vsub(tilt.lpS, tilt.g0);
  const acc = Date.now() - tilt.accT < 3000 ? tilt.acc : 0;
  return Math.asin(Math.max(-1,Math.min(1, (vdot(d,tilt.fwd) - acc)/9.81)))*180/Math.PI;
@@ -1323,7 +1360,7 @@ function updAcc(row, prev){
  tilt.acc = tilt.acc*0.3 + a*0.7; tilt.accT = Date.now();
 }
 function learnFwd(row, prev){
- if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null) return;
+ if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null || tiltAngle() > 25) return;
  const dt = (row.time-prev.time)/1000; if(dt<=0 || dt>3) return;
  const acc = (row.speed-prev.speed)/3.6/dt;
  if(acc < 0.8 || row.speed > 50) return;
@@ -1379,7 +1416,7 @@ const DASHKEY = 'palette_obd2_dash';
 const RANGE = {rpm:[0,7000,6000], speed:[0,140], coolant:[40,120,105], iat:[0,80,60], load:[0,100], throttle:[0,100], map:[20,160,150],
  stft:[-25,25], ltft:[-25,25], timing:[-10,40], o2:[0,1], o2f:[0,1], runtime:[0,3600], volt:[10,16], ecuv:[10,16], lam:[0.7,1.6], lam2:[0.7,1.6],
  cmdlam:[0.7,1.6], thrCmd:[0,40], relthr:[0,40], thrB:[0,100], accD:[0,100], accE:[0,100], purge:[0,100], fuel:[0,100], baro:[90,110],
- aload:[0,130], slope:[-15,15], fsys:[0,8], cat:[0,900], egr:[0,100], maf:[0,50], amb:[-10,45], oilt:[40,130,120], frate:[0,10], fpress:[0,700]};
+ aload:[0,130], slope:[-15,15], vib:[0,2], isc:[0,160], atin:[0,4000], atf:[20,120,100], gear:[0,1], fsys:[0,8], cat:[0,900], egr:[0,100], maf:[0,50], amb:[-10,45], oilt:[40,130,120], frate:[0,10], fpress:[0,700]};
 let dash = {n:2, slots:[{key:'rpm',type:'meter'},{key:'speed',type:'meter'},{key:'map',type:'graph'},{key:'slope',type:'graph'}]};
 try{ Object.assign(dash, JSON.parse(localStorage.getItem(DASHKEY)||'{}')); }catch(e){}
 const saveDash = ()=>{ try{ localStorage.setItem(DASHKEY, JSON.stringify(dash)); }catch(e){} };
