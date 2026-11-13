@@ -47,6 +47,17 @@ select,input{flex:1;min-width:0;background:var(--panel);color:var(--text);border
 #extOut{color:var(--text);font-size:12px;max-height:320px;min-height:40px}
 [hidden]{display:none!important}
 #scanProg.big{font-size:19px;font-weight:700;color:var(--accent);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:12px;position:sticky;top:8px;z-index:5}
+#dash{position:fixed;inset:0;background:var(--bg);z-index:50;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 6px) 8px calc(env(safe-area-inset-bottom) + 6px)}
+.dbar{display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:13px;color:var(--dim)}
+.dbar button{padding:8px 12px;font-size:14px}
+.dbar .dn.on{background:var(--accent);color:#111;border:none}
+#dStat{margin-left:auto;font-size:12px}
+#dGrid{flex:1;display:grid;gap:6px;min-height:0}
+.slot{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
+.shead{display:flex;gap:4px;padding:4px}
+.shead select{flex:1;padding:6px;font-size:14px;border-radius:8px}
+.shead button{padding:6px 10px;font-size:13px}
+.slot canvas{flex:1;width:100%;min-height:0;display:block}
 #meta{font-size:12px;color:var(--dim);margin:2px 0 8px}
 </style>
 </head>
@@ -65,6 +76,12 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <button id="btnStop" disabled>停止</button>
 </div>
 <div id="meta"></div>
+<div class="btns" style="grid-template-columns:2fr 1fr 1fr">
+ <button id="btnDash" class="primary">📊 メーター画面</button>
+ <button id="btnTilt">傾きON</button>
+ <button id="btnLevel">ここを水平に</button>
+</div>
+<div id="tiltOut" class="hint">傾き：センサー未使用</div>
 
 <div class="grid" id="grid"></div>
 
@@ -161,6 +178,14 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 ・故障コードの読取のみ行います（消去はしません）。
 </p>
 <div class="toast" id="toast"></div>
+<div id="dash" hidden>
+ <div class="dbar">
+  <button id="dBack">← 戻る</button><span>枠</span>
+  <button class="dn" data-n="1">1</button><button class="dn" data-n="2">2</button><button class="dn" data-n="3">3</button><button class="dn" data-n="4">4</button>
+  <span id="dStat"></span>
+ </div>
+ <div id="dGrid"></div>
+</div>
 
 <script>
 "use strict";
@@ -206,10 +231,11 @@ const EXTRA = [
  {id:'5E', key:'frate',  label:'燃料流量', unit:'L/h', f:(a,b)=>(a*256+b)/20, dp:2},
 ];
 const FAST = new Set(['0C','0D','0B','11','06','0E','04','45','4C','49']);   // 毎回読む（速く変わる）項目
-let ALL = [...PIDS, VOLT];
+const SLOPE = {key:'slope', label:'傾き(+上り/-下り)', unit:'°', dp:1};
+let ALL = [...PIDS, VOLT, SLOPE];
 function addExtras(ids){
  for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
- ALL = [...PIDS, VOLT];
+ ALL = [...PIDS, VOLT, SLOPE];
  try{ localStorage.setItem('palette_obd2_extra', JSON.stringify(PIDS.map(p=>p.id))); }catch(e){}
 }
 
@@ -485,6 +511,8 @@ async function loop(){
   row.volt = latest.volt;
   if(row.rpm==null && row.speed==null){ if(++misses % 5 === 0) await cmd('ATI'); continue; }   // 読めなかった回は記録しない
   misses = 0;
+  learnFwd(row, samples[samples.length-1]);
+  row.slope = slopeNow(); show(SLOPE, row.slope);
   detect(row);
   meterStep(row);
   samples.push(row); if(samples.length>12000) samples.shift();
@@ -1217,6 +1245,184 @@ buildGrid();
 setExtButtons();
 loadLog();
 loadMeter();
+
+// ===== 傾きセンサー（iPhoneの加速度センサーを水平器として使う） =====
+const TILTKEY = 'palette_obd2_tilt';
+const tilt = {listening:false, on:false, g0:null, fwd:null, fwdN:0, fwdSum:[0,0,0], lpS:null, lpF:null};
+try{ const d = JSON.parse(localStorage.getItem(TILTKEY)||'null'); if(d){ tilt.g0=d.g0; tilt.fwd=d.fwd; tilt.fwdN=d.fwdN||0; tilt.fwdSum=d.fwdSum||[0,0,0]; } }catch(e){}
+const vsub=(a,b)=>a.map((x,i)=>x-b[i]), vdot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0), vnorm=a=>Math.sqrt(vdot(a,a));
+function saveTilt(){ try{ localStorage.setItem(TILTKEY, JSON.stringify({g0:tilt.g0, fwd:tilt.fwd, fwdN:tilt.fwdN, fwdSum:tilt.fwdSum})); }catch(e){} }
+function onMotion(e){
+ const a = e.accelerationIncludingGravity; if(!a || a.x==null) return;
+ const v = [a.x, a.y, a.z];
+ tilt.lpS = tilt.lpS ? tilt.lpS.map((x,i)=>x+0.03*(v[i]-x)) : v.slice();   // ゆっくり（約0.5秒）
+ tilt.lpF = tilt.lpF ? tilt.lpF.map((x,i)=>x+0.25*(v[i]-x)) : v.slice();   // 速め（加速の向き学習用）
+ tilt.on = true;
+}
+function tiltAngle(){ if(!tilt.g0 || !tilt.lpS) return null; const c = vdot(tilt.g0,tilt.lpS)/(vnorm(tilt.g0)*vnorm(tilt.lpS)); return Math.acos(Math.max(-1,Math.min(1,c)))*180/Math.PI; }
+// 上り坂は「前向きに加速している」のと同じ向きにセンサーが傾くので、発進時の加速の向きを「前」として覚える
+function slopeNow(){
+ if(!tilt.on || !tilt.g0 || !tilt.fwd || !tilt.lpS) return null;
+ const d = vsub(tilt.lpS, tilt.g0);
+ return Math.asin(Math.max(-1,Math.min(1, vdot(d,tilt.fwd)/9.81)))*180/Math.PI;
+}
+function learnFwd(row, prev){
+ if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null) return;
+ const dt = (row.time-prev.time)/1000; if(dt<=0 || dt>3) return;
+ const acc = (row.speed-prev.speed)/3.6/dt;
+ if(acc < 0.8 || row.speed > 50) return;
+ let d = vsub(tilt.lpF, tilt.g0);
+ const gu = tilt.g0.map(x=>x/vnorm(tilt.g0));
+ d = vsub(d, gu.map(x=>x*vdot(d,gu)));            // 上下方向の成分は除く
+ const n = vnorm(d); if(n < 0.3) return;
+ tilt.fwdSum = tilt.fwdSum.map((x,i)=>x+d[i]/n); tilt.fwdN++;
+ if(tilt.fwdN >= 5){ const m = vnorm(tilt.fwdSum); tilt.fwd = tilt.fwdSum.map(x=>x/m); }
+ saveTilt();
+}
+function tiltText(){
+ if(!tilt.on) return '傾き：センサー未使用（「傾きON」を押してください）';
+ if(!tilt.g0) return '傾き：平らな場所に停めて「ここを水平に」を押してください';
+ const mag = tiltAngle(), moved = mag!=null && mag > 25 ? '　※ホルダーが動いた？「ここを水平に」をやり直してください' : '';
+ if(!tilt.fwd) return `傾き：${(mag||0).toFixed(1)}°（上りか下りかは、発進するたびに自動で覚えます ${Math.min(tilt.fwdN,5)}/5）${moved}`;
+ const sl = slopeNow();
+ return `傾き：${sl>=0?'+':''}${sl.toFixed(1)}°（${Math.abs(sl)<1?'ほぼ平ら':sl>0?'上り':'下り'}）${moved}`;
+}
+async function tiltOnClick(){
+ try{
+  if(typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
+   const r = await DeviceMotionEvent.requestPermission();
+   if(r!=='granted'){ toast('傾きセンサーが許可されませんでした'); return; }
+  }
+ }catch(e){ log('傾きセンサー許可: '+(e.message||e)); }
+ if(!tilt.listening && typeof window!=='undefined'){ window.addEventListener('devicemotion', onMotion); tilt.listening = true; }
+ setTimeout(()=>{ toast(tilt.on ? '傾きセンサーON' : 'このブラウザでは傾きセンサーが使えないようです'); }, 2000);
+}
+function levelClick(){
+ if(!tilt.on){ toast('先に「傾きON」を押してください'); return; }
+ if(running && latest.speed > 0){ toast('停車中に押してください'); return; }
+ const old = tilt.g0, now = tilt.lpS.slice();
+ if(old){ const c = vdot(old,now)/(vnorm(old)*vnorm(now)); if(Math.acos(Math.max(-1,Math.min(1,c)))*180/Math.PI > 10){ tilt.fwd=null; tilt.fwdN=0; tilt.fwdSum=[0,0,0]; } }
+ else { tilt.fwd=null; tilt.fwdN=0; tilt.fwdSum=[0,0,0]; }
+ tilt.g0 = now; saveTilt(); toast('ここを水平（0°）にしました');
+}
+$('btnTilt').onclick = tiltOnClick;
+$('btnLevel').onclick = levelClick;
+setInterval(()=>{ $('tiltOut').textContent = tiltText(); if(!running && tilt.on) show(SLOPE, slopeNow()); }, 500);
+
+// ===== メーター画面（1〜4枠、メーターかグラフ） =====
+const DASHKEY = 'palette_obd2_dash';
+const RANGE = {rpm:[0,7000,6000], speed:[0,140], coolant:[40,120,105], iat:[0,80,60], load:[0,100], throttle:[0,100], map:[20,160,150],
+ stft:[-25,25], ltft:[-25,25], timing:[-10,40], o2:[0,1], o2f:[0,1], runtime:[0,3600], volt:[10,16], ecuv:[10,16], lam:[0.7,1.6], lam2:[0.7,1.6],
+ cmdlam:[0.7,1.6], thrCmd:[0,40], relthr:[0,40], thrB:[0,100], accD:[0,100], accE:[0,100], purge:[0,100], fuel:[0,100], baro:[90,110],
+ aload:[0,130], slope:[-15,15], fsys:[0,8], cat:[0,900], egr:[0,100], maf:[0,50], amb:[-10,45], oilt:[40,130,120], frate:[0,10], fpress:[0,700]};
+let dash = {n:2, slots:[{key:'rpm',type:'meter'},{key:'speed',type:'meter'},{key:'map',type:'graph'},{key:'slope',type:'graph'}]};
+try{ Object.assign(dash, JSON.parse(localStorage.getItem(DASHKEY)||'{}')); }catch(e){}
+const saveDash = ()=>{ try{ localStorage.setItem(DASHKEY, JSON.stringify(dash)); }catch(e){} };
+const dispVal = {};
+let dashOpen = false;
+const itemOf = k => ALL.find(p=>p.key===k) || ALL[0];
+const valueOf = k => k==='slope' ? slopeNow() : latest[k];
+function rangeOf(p){ const r = RANGE[p.key]; return r ? r : [0, p.max || 100]; }
+function buildDash(){
+ const g = $('dGrid'); g.innerHTML = '';
+ const opts = ALL.map(p=>`<option value="${p.key}">${p.label}</option>`).join('');
+ for(let i=0;i<dash.n;i++){
+  const sl = dash.slots[i];
+  const d = document.createElement('div'); d.className='slot';
+  d.innerHTML = `<div class="shead"><select>${opts}</select><button>${sl.type==='meter'?'メーター':'グラフ'}</button></div><canvas></canvas>`;
+  const sel = d.querySelector('select'); sel.value = itemOf(sl.key).key;
+  sel.onchange = ()=>{ sl.key = sel.value; delete dispVal[i]; saveDash(); };
+  const b = d.querySelector('button');
+  b.onclick = ()=>{ sl.type = sl.type==='meter'?'graph':'meter'; b.textContent = sl.type==='meter'?'メーター':'グラフ'; saveDash(); };
+  g.appendChild(d);
+ }
+ document.querySelectorAll('.dn').forEach(b=>b.classList.toggle('on', +b.dataset.n===dash.n));
+ layoutDash();
+}
+function layoutDash(){
+ const g = $('dGrid'), land = innerWidth > innerHeight;
+ if(dash.n===1){ g.style.gridTemplateColumns='1fr'; g.style.gridTemplateRows='1fr'; }
+ else if(dash.n===2){ g.style.gridTemplateColumns = land?'1fr 1fr':'1fr'; g.style.gridTemplateRows = land?'1fr':'1fr 1fr'; }
+ else { g.style.gridTemplateColumns='1fr 1fr'; g.style.gridTemplateRows='1fr 1fr'; }
+}
+function fmtNum(v, p){ return v==null||isNaN(v) ? '--' : (+v).toFixed(p.dp ?? 0); }
+function drawMeter(ctx, W, H, p, v){
+ const [mn, mx, red] = rangeOf(p);
+ const R = Math.min(W*0.44, H*0.52), cx = W/2, cy = H*0.55 + R*0.08;
+ const a0 = Math.PI*0.75, a1 = Math.PI*2.25;
+ const ang = x => a0 + (Math.max(mn,Math.min(mx,x))-mn)/(mx-mn)*(a1-a0);
+ const big = mx >= 2000, sc = big ? 1000 : 1;
+ ctx.lineCap = 'round'; ctx.lineWidth = R*0.1;
+ ctx.strokeStyle = '#232a32'; ctx.beginPath(); ctx.arc(cx,cy,R,a0,a1); ctx.stroke();
+ if(red!=null){ ctx.strokeStyle='rgba(255,90,90,.75)'; ctx.beginPath(); ctx.arc(cx,cy,R,ang(red),a1); ctx.stroke(); }
+ if(v!=null && !isNaN(v)){ ctx.strokeStyle = (red!=null && v>=red) ? '#ff5a5a' : '#ffb020'; ctx.beginPath(); ctx.arc(cx,cy,R,a0,ang(v)); ctx.stroke(); }
+ ctx.fillStyle = '#8894a0'; ctx.font = `${Math.round(R*0.13)}px -apple-system,sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+ ctx.lineWidth = Math.max(1, R*0.015); ctx.strokeStyle = '#8894a0';
+ const raw = (mx-mn)/7, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+ const step = [1,2,2.5,5,10].map(m=>m*mag).find(x=>x>=raw);
+ for(let x = Math.ceil(mn/step*2)*step/2; x <= mx+1e-9; x += step/2){
+  const a = ang(x), c = Math.cos(a), s = Math.sin(a), major = Math.abs(x/step - Math.round(x/step)) < 1e-6;
+  ctx.beginPath(); ctx.moveTo(cx+c*R*(major?0.78:0.82), cy+s*R*(major?0.78:0.82)); ctx.lineTo(cx+c*R*0.86, cy+s*R*0.86); ctx.stroke();
+  if(major){ const t = x/sc; ctx.fillText(Number.isInteger(+t.toFixed(3)) ? Math.round(t) : t.toFixed(1), cx+c*R*0.64, cy+s*R*0.64); }
+ }
+ if(v!=null && !isNaN(v)){
+  const a = ang(v); ctx.strokeStyle='#e8edf2'; ctx.lineWidth = Math.max(2,R*0.03);
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(a)*R*0.78, cy+Math.sin(a)*R*0.78); ctx.stroke();
+ }
+ ctx.fillStyle = '#e8edf2'; ctx.beginPath(); ctx.arc(cx,cy,R*0.05,0,Math.PI*2); ctx.fill();
+ ctx.font = `700 ${Math.round(R*0.26)}px -apple-system,sans-serif`; ctx.fillText(fmtNum(latestOrDisp(p,v), p), cx, cy+R*0.34);
+ ctx.fillStyle = '#8894a0'; ctx.font = `${Math.round(R*0.13)}px -apple-system,sans-serif`;
+ ctx.fillText(p.unit + (big ? '（目盛×1000）' : ''), cx, cy+R*0.58);
+}
+function latestOrDisp(p, v){ const t = valueOf(p.key); return t==null ? v : t; }
+function drawGraph(ctx, W, H, p){
+ const now = Date.now(), span = 90000, k = p.key;
+ const pts = samples.filter(r=>now-r.time<=span && r[k]!=null && !isNaN(r[k])).map(r=>[+r.time, r[k]]);
+ const live = valueOf(k); if(live!=null && !isNaN(live)) pts.push([now, live]);
+ const [mn, mx] = rangeOf(p);
+ let lo = pts.length ? Math.min(...pts.map(x=>x[1])) : mn, hi = pts.length ? Math.max(...pts.map(x=>x[1])) : mx;
+ const minSpan = (mx-mn)*0.1; if(hi-lo < minSpan){ const c=(hi+lo)/2; lo=c-minSpan/2; hi=c+minSpan/2; }
+ const pad = (hi-lo)*0.1; lo -= pad; hi += pad;
+ const L = W*0.13, T = H*0.16, Bm = H*0.08, PW = W-L-W*0.03, PH = H-T-Bm;
+ const y = v => T + PH*(1-(v-lo)/(hi-lo)), x = t => L + PW*(1-(now-t)/span);
+ const fs = Math.round(Math.min(W,H)*0.055);
+ ctx.font = `${fs}px -apple-system,sans-serif`; ctx.textAlign='right'; ctx.textBaseline='middle';
+ for(let i=0;i<=4;i++){
+  const v = lo+(hi-lo)*i/4, yy = y(v);
+  ctx.strokeStyle='#232a32'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(L,yy); ctx.lineTo(L+PW,yy); ctx.stroke();
+  ctx.fillStyle='#8894a0'; ctx.fillText((hi-lo)<5 ? v.toFixed(1) : Math.round(v), L-4, yy);
+ }
+ if(k==='slope'){ ctx.strokeStyle='#3ddc97'; ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(L,y(0)); ctx.lineTo(L+PW,y(0)); ctx.stroke(); ctx.setLineDash([]); }
+ ctx.strokeStyle='#ffb020'; ctx.lineWidth=Math.max(2, W*0.006); ctx.beginPath();
+ pts.forEach(([t,v],i)=>{ const X=x(t), Y=y(v); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); }); ctx.stroke();
+ ctx.textAlign='left'; ctx.fillStyle='#e8edf2'; ctx.font = `700 ${Math.round(fs*1.8)}px -apple-system,sans-serif`;
+ ctx.fillText(`${fmtNum(live, p)} ${p.unit}`, L, T*0.5);
+ ctx.textAlign='right'; ctx.fillStyle='#8894a0'; ctx.font = `${fs}px -apple-system,sans-serif`; ctx.fillText('直近90秒', L+PW, T*0.5);
+}
+function dashFrame(){
+ if(!dashOpen) return;
+ const cs = $('dGrid').querySelectorAll('canvas'), dpr = window.devicePixelRatio || 1;
+ cs.forEach((c,i)=>{
+  const W = Math.round(c.clientWidth*dpr), H = Math.round(c.clientHeight*dpr);
+  if(c.width!==W || c.height!==H){ c.width=W; c.height=H; }
+  const ctx = c.getContext('2d'); ctx.clearRect(0,0,W,H);
+  const sl = dash.slots[i], p = itemOf(sl.key);
+  if(sl.type==='meter'){
+   const t = valueOf(p.key);
+   if(t==null || isNaN(t)) dispVal[i] = null;
+   else dispVal[i] = dispVal[i]==null ? t : dispVal[i] + (t-dispVal[i])*0.2;   // 針をなめらかに
+   drawMeter(ctx, W, H, p, dispVal[i]);
+  } else drawGraph(ctx, W, H, p);
+ });
+ $('dStat').textContent = $('status').textContent;
+ requestAnimationFrame(dashFrame);
+}
+function openDash(){ dashOpen = true; $('dash').hidden = false; buildDash(); requestAnimationFrame(dashFrame); }
+function closeDash(){ dashOpen = false; $('dash').hidden = true; }
+$('btnDash').onclick = openDash;
+$('dBack').onclick = closeDash;
+document.querySelectorAll('.dn').forEach(b=>b.onclick = ()=>{ dash.n = +b.dataset.n; saveDash(); buildDash(); });
+if(typeof window!=='undefined' && window.addEventListener) window.addEventListener('resize', ()=>{ if(dashOpen) layoutDash(); });
 $('btnMeterOpt').onclick = ()=>{ $('meterOpt').hidden = !$('meterOpt').hidden; };
 function twice(btn, label, fn){
  if(btn.dataset.sure!=='1'){ btn.dataset.sure='1'; btn.textContent='本当に？'; setTimeout(()=>{ btn.dataset.sure=''; btn.textContent=label; },3000); return; }
