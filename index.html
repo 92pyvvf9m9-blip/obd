@@ -647,6 +647,7 @@ async function start(kind, req){
  }catch(e){
   log('エラー: '+(e.message||e));
   setStatus(e.name==='NotFoundError'?'キャンセル':'エラー','err');
+  if(e.name==='NotFoundError'){ window._lastCancel = Date.now(); toast('見つからない時は、10秒以内にもう一度「接続」を押すと全部表示します'); }
   if(e.name!=='NotFoundError') toast(e.message||'接続できませんでした');
   stop();
  }
@@ -1325,7 +1326,12 @@ $('btnConnect').onclick = ()=>{
  if(!navigator.bluetooth){ $('warn').hidden=false; toast('Bluefyで開いてください'); return; }
  autoAbort = true; reconnecting = false;
  let req;
- try{ req = navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES}); }  // 押した瞬間に選択画面
+ // OBD2アダプターだけを表示（キャンセル後10秒以内にもう一度押すと全部表示）
+ const showAll = Date.now() - (window._lastCancel||0) < 10000;
+ const opt = showAll ? {acceptAllDevices:true, optionalServices:SERVICES}
+  : {filters:[{namePrefix:'OBD'},{namePrefix:'obd'},{namePrefix:'Obd'},{namePrefix:'V-LINK'},{namePrefix:'Vlink'},{namePrefix:'IOS-Vlink'},{namePrefix:'ELM'},{namePrefix:'Viecar'},{namePrefix:'vLinker'},
+      ...SERVICES.map(u=>({services:[u]}))], optionalServices:SERVICES};
+ try{ req = navigator.bluetooth.requestDevice(opt); }  // 押した瞬間に選択画面
  catch(e){ toast('選択画面を出せませんでした: '+(e.message||e)); return; }
  start('ble', req);
 };
