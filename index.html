@@ -237,8 +237,8 @@ const VIB   = {key:'vib',   label:'車体の揺れ(iPhone)', unit:'m/s²', dp:2}
 const SUZUKI = [
  {key:'isc',  label:'アイドル空気補正(ISC)', unit:'',    dp:0, src:'E', f:d=>d.length>34 ? d[34] : null},
  {key:'atin', label:'AT入力回転',           unit:'rpm', dp:0, src:'A', f:d=>d.length>1 ? ((d[0]<<8)|d[1])/4 : null},
- {key:'atf',  label:'CVT油温(候補)',         unit:'℃',  dp:0, src:'A', f:d=>d.length>7 ? ((d[6]<<8)|d[7]) : null},
- {key:'gear', label:'ギア接続(1=R/D)',       unit:'',    dp:0, src:'A', f:d=>d.length>99 ? (d[99] < 150 ? 1 : 0) : null},
+ {key:'atout',label:'AT出力回転',           unit:'rpm', dp:0, src:'A', f:d=>d.length>7 ? ((d[6]<<8)|d[7])/4 : null},
+ {key:'gear', label:'停車中にR/Dが入っている(1=はい)', unit:'', dp:0, src:'A', f:d=>d.length>99 ? (d[99] < 150 ? 1 : 0) : null},
 ];
 let ALL = [...PIDS, VOLT, SLOPE, VIB, ...SUZUKI];
 function addExtras(ids){
@@ -350,23 +350,26 @@ function parseDtc(r, pre='43'){
 }
 
 // ===== Bluetooth (BLE) 接続 =====
+const withTimeout=(p,ms,msg)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg)),ms))]);
 let bleDevice = null, userStop = false, reconnecting = false, lastKind = 'ble';
 async function bleTransport(known){
  const device = known || await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES});
  bleDevice = device;
  try{ localStorage.setItem('palette_obd2_dev', JSON.stringify({id:device.id, name:device.name||''})); }catch(e){}
- setStatus(autoRunning ? '自動接続中…' : '接続中…');
- const server = await device.gatt.connect();
+ if(!autoRunning) setStatus('接続中…');
+ let server;
+ try{ server = await withTimeout(device.gatt.connect(), 12000, 'アダプターが応答しません（エンジンOFF、または他のアプリが接続中）'); }
+ catch(e){ try{ device.gatt.disconnect(); }catch(e2){} throw e; }
  let nChar=null, wChar=null;
  for(const u of SERVICES){
-  let svc; try{ svc = await server.getPrimaryService(u); }catch(e){ continue; }
+  let svc; try{ svc = await withTimeout(server.getPrimaryService(u), 6000, 'timeout'); }catch(e){ continue; }
   const chars = await svc.getCharacteristics();
   const n = chars.find(c=>c.properties.notify||c.properties.indicate);
   const w = chars.find(c=>c.properties.write||c.properties.writeWithoutResponse);
   if(n && w){ nChar=n; wChar=w; log('サービス '+u); break; }
  }
  if(!nChar) throw new Error('OBD2用の通信口が見つかりません（Bluetooth Classic専用の機種の可能性）');
- await nChar.startNotifications();
+ await withTimeout(nChar.startNotifications(), 8000, '通知の開始に失敗しました');
  const dec = new TextDecoder();
  nChar.addEventListener('characteristicvaluechanged', e=>onData(dec.decode(e.target.value)));
  if(!device._palHooked){ device._palHooked = true; device.addEventListener('gattserverdisconnected', onLinkLost); }
@@ -616,7 +619,7 @@ async function autoReconnect(){
   await new Promise(r=>setTimeout(r, 3000));
  }
  reconnecting = false;
- if(!userStop){ setStatus('切断されました','err'); updateButtons(false); toast('再接続できませんでした。「接続」を押してください'); }
+ if(!userStop){ setStatus('切断されました','err'); updateButtons(false); }
 }
 document.addEventListener('visibilitychange', ()=>{
  if(document.visibilityState==='visible' && bleDevice && !connected && !userStop && !reconnecting && lastKind==='ble') autoReconnect();
@@ -669,8 +672,8 @@ async function autoConnectOnLoad(){
 async function autoLoop(dev){
  if(autoRunning) return;
  autoRunning = true; autoAbort = false; userStop = false; lastKind = 'ble';
- for(let i=1; i<=150 && !autoAbort && !connected; i++){
-  setStatus(`自動接続中…(${i})`);
+ for(let i=1; i<=30 && !autoAbort && !connected; i++){          // 約2〜3分探して、見つからなければやめる
+  setStatus(`自動接続中…(${i}/30)`);
   if(i===1) $('meta').textContent = `「${dev.name||'OBD2'}」を探しています。エンジン（またはACC）をONにしてください`;
   try{
    transport = await bleTransport(dev);
@@ -679,14 +682,16 @@ async function autoLoop(dev){
    break;
   }catch(e){
    log('自動接続: '+(e.message||e));
+   if(autoAbort) break;                       // 手動の「接続」に切り替わったら、何も片付けずに抜ける
    running = false; connected = false;
    try{ transport && transport.close(); }catch(e2){}
    updateButtons(false);
   }
+  if(autoAbort) break;
   await new Promise(r=>setTimeout(r, 4000));
  }
  autoRunning = false;
- if(!connected && !autoAbort){ setStatus('未接続'); }
+ if(!connected && !autoAbort){ setStatus('未接続'); $('meta').textContent='自動接続できませんでした。「接続」を押して選んでください'; }
 }
 
 function stop(){
@@ -1318,6 +1323,9 @@ $('btnExtCopy').onclick = ()=>copy(extLines.length ? '【スズキ パレットS
 $('scanPreset').onchange = ()=>{ $('customRange').hidden = $('scanPreset').value!=='custom'; };
 $('btnConnect').onclick = ()=>{
  if(!navigator.bluetooth){ $('warn').hidden=false; toast('Bluefyで開いてください'); return; }
+ // 自動接続の途中でも、押したら必ず止めて選択画面を出す
+ autoAbort = true; reconnecting = false;
+ try{ if(bleDevice && bleDevice.gatt && !connected) bleDevice.gatt.disconnect(); }catch(e){}
  start('ble');
 };
 $('btnDemo').onclick = ()=>start('demo');
@@ -1361,7 +1369,7 @@ function tiltAngle(){ if(!tilt.g0 || !tilt.lpS) return null; const c = vdot(tilt
 // 加速・ブレーキ中はセンサーが「坂」と区別できないので、車速の変化（OBD）から加減速ぶんを差し引く
 function slopeNow(){
  if(!tilt.on || !tilt.g0 || !tilt.fwd || !tilt.lpS) return null;
- if(tiltAngle() > 25){                                  // ホルダーがずれた：でたらめな値は記録しない
+ if(tiltAngle() > 15){                                  // ホルダーがずれた：でたらめな値は記録しない
   if(!tilt.movedWarned){ tilt.movedWarned = true; try{ addEvent(Date.now(),'holder','iPhoneの角度がずれた（傾きの記録を停止）'); }catch(e){} }
   return null;
  }
@@ -1377,7 +1385,7 @@ function updAcc(row, prev){
  tilt.acc = tilt.acc*0.3 + a*0.7; tilt.accT = Date.now();
 }
 function learnFwd(row, prev){
- if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null || tiltAngle() > 25) return;
+ if(!tilt.on || !tilt.g0 || !tilt.lpF || !prev || row.speed==null || prev.speed==null || tiltAngle() > 15) return;
  const dt = (row.time-prev.time)/1000; if(dt<=0 || dt>3) return;
  const acc = (row.speed-prev.speed)/3.6/dt;
  if(acc < 0.8 || row.speed > 50) return;
@@ -1392,7 +1400,7 @@ function learnFwd(row, prev){
 function tiltText(){
  if(!tilt.on) return '傾き：センサー未使用（「傾きON」を押してください）';
  if(!tilt.g0) return '傾き：平らな場所に停めて「ここを水平に」を押してください';
- const mag = tiltAngle(), moved = mag!=null && mag > 25 ? '　※ホルダーが動いた？「ここを水平に」をやり直してください' : '';
+ const mag = tiltAngle(), moved = mag!=null && mag > 15 ? '　※ホルダーが動いた？「ここを水平に」をやり直してください' : '';
  if(!tilt.fwd) return `傾き：${(mag||0).toFixed(1)}°（上りか下りかは、発進するたびに自動で覚えます ${Math.min(tilt.fwdN,5)}/5）${moved}`;
  const sl = slopeNow();
  return `傾き：${sl>=0?'+':''}${sl.toFixed(1)}°（${Math.abs(sl)<1?'ほぼ平ら':sl>0?'上り':'下り'}）${moved}`;
@@ -1433,7 +1441,7 @@ const DASHKEY = 'palette_obd2_dash';
 const RANGE = {rpm:[0,7000,6000], speed:[0,140], coolant:[40,120,105], iat:[0,80,60], load:[0,100], throttle:[0,100], map:[20,160,150],
  stft:[-25,25], ltft:[-25,25], timing:[-10,40], o2:[0,1], o2f:[0,1], runtime:[0,3600], volt:[10,16], ecuv:[10,16], lam:[0.7,1.6], lam2:[0.7,1.6],
  cmdlam:[0.7,1.6], thrCmd:[0,40], relthr:[0,40], thrB:[0,100], accD:[0,100], accE:[0,100], purge:[0,100], fuel:[0,100], baro:[90,110],
- aload:[0,130], slope:[-15,15], vib:[0,2], isc:[0,160], atin:[0,4000], atf:[20,120,100], gear:[0,1], fsys:[0,8], cat:[0,900], egr:[0,100], maf:[0,50], amb:[-10,45], oilt:[40,130,120], frate:[0,10], fpress:[0,700]};
+ aload:[0,130], slope:[-15,15], vib:[0,2], isc:[0,160], atin:[0,4000], atout:[0,4000], gear:[0,1], fsys:[0,8], cat:[0,900], egr:[0,100], maf:[0,50], amb:[-10,45], oilt:[40,130,120], frate:[0,10], fpress:[0,700]};
 let dash = {n:2, slots:[{key:'rpm',type:'meter'},{key:'speed',type:'meter'},{key:'map',type:'graph'},{key:'slope',type:'graph'}]};
 try{ Object.assign(dash, JSON.parse(localStorage.getItem(DASHKEY)||'{}')); }catch(e){}
 const saveDash = ()=>{ try{ localStorage.setItem(DASHKEY, JSON.stringify(dash)); }catch(e){} };
