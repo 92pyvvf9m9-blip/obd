@@ -638,11 +638,11 @@ async function afterTransport(kind){
  cycle = 0;
  loopPromise = loop();
 }
-async function start(kind){
+async function start(kind, req){
  autoAbort = true;
  userStop = false; lastKind = kind;
  try{
-  transport = kind==='demo' ? demoTransport() : await bleTransport();
+  transport = kind==='demo' ? demoTransport() : await bleTransport(req ? await req : undefined);
   await afterTransport(kind);
  }catch(e){
   log('エラー: '+(e.message||e));
@@ -1323,10 +1323,11 @@ $('btnExtCopy').onclick = ()=>copy(extLines.length ? '【スズキ パレットS
 $('scanPreset').onchange = ()=>{ $('customRange').hidden = $('scanPreset').value!=='custom'; };
 $('btnConnect').onclick = ()=>{
  if(!navigator.bluetooth){ $('warn').hidden=false; toast('Bluefyで開いてください'); return; }
- // 自動接続の途中でも、押したら必ず止めて選択画面を出す
  autoAbort = true; reconnecting = false;
- try{ if(bleDevice && bleDevice.gatt && !connected) bleDevice.gatt.disconnect(); }catch(e){}
- start('ble');
+ let req;
+ try{ req = navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:SERVICES}); }  // 押した瞬間に選択画面
+ catch(e){ toast('選択画面を出せませんでした: '+(e.message||e)); return; }
+ start('ble', req);
 };
 $('btnDemo').onclick = ()=>start('demo');
 $('btnStop').onclick = stop;
@@ -1432,7 +1433,8 @@ try{
   document.addEventListener('touchend', once, true); document.addEventListener('click', once, true);   // 許可が必要なら最初のタップで
  }
 }catch(e){}
-autoConnectOnLoad();
+// 自動接続はBluefyで固まるため停止（接続ボタンを押したらすぐ選択画面）
+try{ const sv=savedDev(); if(sv) $('meta').textContent=`前回のアダプター：${sv.name||'OBDII'}。「接続」を押して選んでください`; }catch(e){}
 $('btnLevel').onclick = levelClick;
 setInterval(()=>{ $('tiltOut').textContent = tiltText(); if(!running && tilt.on) show(SLOPE, slopeNow()); }, 500);
 
