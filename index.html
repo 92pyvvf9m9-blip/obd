@@ -591,18 +591,21 @@ function detect(row){
  // --- ボタンを押さなくても自動で拾う ---
  // ノッキング疑い：負荷が高い・アクセルを戻していないのに点火時期が急に5°以上下がった
  if(row.timing!=null && prev.timing!=null && row.speed>5 && ((row.map??0)>=100 || (row.load??0)>=60)
-    && prev.timing-row.timing>=5 && (row.throttle??0) >= (prev.throttle??0)-1 && Math.abs(row.rpm-prev.rpm)<400)
+    && prev.timing-row.timing>=5 && Math.abs((row.throttle??0)-(prev.throttle??0))<2
+    && Math.abs((row.map??0)-(prev.map??0))<8 && Math.abs(row.rpm-prev.rpm)<300)
   addEvent(t,'knock',`ノッキング疑い（点火 ${prev.timing}→${row.timing}°）`);
  // 停車中のブルブル：直近8件の回転のばらつき、またはiPhoneの揺れ
  const recent = samples.slice(-7).concat([row]);
- if(recent.length>=8 && recent.every(r=>r.speed===0 && r.rpm>300) && offPedal(row)){
+ let stopSince = t; for(let i=samples.length-1;i>=0 && samples[i].speed===0;i--) stopSince = +samples[i].time;
+ if(recent.length>=8 && t-stopSince>=15000 && recent.every(r=>r.speed===0 && r.rpm>300 && r.rpm<1100) && offPedal(row)){
   const m = recent.reduce((a,r)=>a+r.rpm,0)/recent.length;
   const sd = Math.sqrt(recent.reduce((a,r)=>a+(r.rpm-m)**2,0)/recent.length);
-  if(sd>=70) addEvent(t,'rough',`停車中アイドリング不安定（ばらつき${Math.round(sd)}rpm）`);
+  let turns = 0; for(let i=2;i<recent.length;i++){ const d1=recent[i-1].rpm-recent[i-2].rpm, d2=recent[i].rpm-recent[i-1].rpm; if(d1*d2<0) turns++; }
+  if(sd>=60 && turns>=2) addEvent(t,'rough',`停車中アイドリング不安定（ばらつき${Math.round(sd)}rpm）`);
  }
  if(row.speed===0 && row.vib!=null && row.vib>=0.9 && row.rpm>300 && offPedal(row)) addEvent(t,'shake',`停車中の揺れが大きい ${row.vib.toFixed(2)}m/s²`);
  // 燃料の濃い・薄い：短期燃調が±12%を超えた
- if(row.stft!=null && row.rpm>300 && Math.abs(row.stft)>=12 && row.speed<5)
+ if(row.stft!=null && row.rpm>300 && Math.abs(row.stft)>=12 && row.speed===0 && t-stopSince>=8000 && row.fsys===2 && prev.fsys===2)
   addEvent(t,'trim',`燃調が大きく補正 ${row.stft>0?'+':''}${row.stft.toFixed(1)}%（${row.stft<0?'濃い':'薄い'}）`);
 }
 // ===== 切断されたら自動で再接続 =====
