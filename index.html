@@ -85,7 +85,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 
 <div class="grid" id="grid"></div>
 
-<button id="btnMark" style="width:100%;margin:10px 0 2px">📍 今の瞬間に印をつける（ブルブル・違和感があった時／停車中に）</button>
+<button id="btnMark" style="width:100%;margin:10px 0 2px">📍 違和感の印（止まってからでOK・直前2分を保存）</button>
 <div id="evOut" class="hint"></div>
 
 <h2 class="sec">メーター（ページで計算）</h2>
@@ -588,6 +588,22 @@ function detect(row){
  else if(row.speed===0 && prev.speed===0 && offPedal(row) && offPedal(prev) && Math.abs(row.rpm-prev.rpm)>=120)
   addEvent(t,'jump',`停車中に回転が急変 ${Math.round(prev.rpm)}→${Math.round(row.rpm)}rpm`);
  if(row.volt!=null && row.volt<12.5 && row.rpm>500) addEvent(t,'volt',`電圧低下 ${row.volt}V`);
+ // --- ボタンを押さなくても自動で拾う ---
+ // ノッキング疑い：負荷が高い・アクセルを戻していないのに点火時期が急に5°以上下がった
+ if(row.timing!=null && prev.timing!=null && row.speed>5 && ((row.map??0)>=100 || (row.load??0)>=60)
+    && prev.timing-row.timing>=5 && (row.throttle??0) >= (prev.throttle??0)-1 && Math.abs(row.rpm-prev.rpm)<400)
+  addEvent(t,'knock',`ノッキング疑い（点火 ${prev.timing}→${row.timing}°）`);
+ // 停車中のブルブル：直近8件の回転のばらつき、またはiPhoneの揺れ
+ const recent = samples.slice(-7).concat([row]);
+ if(recent.length>=8 && recent.every(r=>r.speed===0 && r.rpm>300) && offPedal(row)){
+  const m = recent.reduce((a,r)=>a+r.rpm,0)/recent.length;
+  const sd = Math.sqrt(recent.reduce((a,r)=>a+(r.rpm-m)**2,0)/recent.length);
+  if(sd>=70) addEvent(t,'rough',`停車中アイドリング不安定（ばらつき${Math.round(sd)}rpm）`);
+ }
+ if(row.speed===0 && row.vib!=null && row.vib>=0.9 && row.rpm>300 && offPedal(row)) addEvent(t,'shake',`停車中の揺れが大きい ${row.vib.toFixed(2)}m/s²`);
+ // 燃料の濃い・薄い：短期燃調が±12%を超えた
+ if(row.stft!=null && row.rpm>300 && Math.abs(row.stft)>=12 && row.speed<5)
+  addEvent(t,'trim',`燃調が大きく補正 ${row.stft>0?'+':''}${row.stft.toFixed(1)}%（${row.stft<0?'濃い':'薄い'}）`);
 }
 // ===== 切断されたら自動で再接続 =====
 let reconnectFactory = () => bleTransport(bleDevice);
@@ -789,8 +805,9 @@ function summaryText(){
  if(events.length){
   L.push(''); L.push('【検出した異変・印】');
   for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}`);
-  for(const e of events.slice(-3)){
-   const rows = samples.filter(r=>r.time>=e.t-25000 && r.time<=e.t+10000);
+  for(const e of events.slice(-5)){
+   const back = e.text.startsWith('手動の印') ? 120000 : 25000;
+   const rows = samples.filter(r=>r.time>=e.t-back && r.time<=e.t+10000);
    if(rows.length){ L.push(''); L.push(`▼ ${new Date(e.t).toLocaleTimeString('ja-JP')}「${e.text}」前後の生データ`); L.push(csvText(rows)); }
   }
  }
@@ -1307,7 +1324,7 @@ async function hunt(){
 $('btnHunt').onclick = ()=>withPause(hunt);
 $('btnAuto').onclick = ()=>withPause(fullAuto);
 $('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
-$('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（違和感あり）'); saveLog(); };
+$('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（この前2分のどこかで違和感）'); saveLog(); };
 document.addEventListener('visibilitychange', async ()=>{ if(document.visibilityState==='visible' && running){ try{ await navigator.wakeLock?.request('screen'); }catch(e){} } });
 $('btnKline').onclick = ()=>withPause(()=>klineScan(false));
 $('btnKlineDeep').onclick = ()=>withPause(()=>klineScan(true));
