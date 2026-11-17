@@ -233,6 +233,9 @@ const EXTRA = [
 const FAST = new Set(['0C','0D','0B','11','06','0E','04','45','4C','49']);   // 毎回読む（速く変わる）項目
 const SLOPE = {key:'slope', label:'傾き(+上り/-下り)', unit:'°', dp:1};
 const VIB   = {key:'vib',   label:'車体の揺れ(iPhone)', unit:'m/s²', dp:2};
+const AIR   = {key:'air',   label:'吸入空気量(推定)', unit:'g/s', dp:2, max:40};
+// 止まる前後はこの項目だけを最速で読む（1秒に数回）
+const STOPFAST = new Set(['0C','0D','0B','11','45','4C','06','0E','03']);
 // スズキ独自データ（2026/11/14の解読用記録で判明）
 const SUZUKI = [
  {key:'isc',  label:'アイドル空気補正(ISC)', unit:'',    dp:0, src:'E', f:d=>d.length>34 ? d[34] : null},
@@ -240,10 +243,10 @@ const SUZUKI = [
  {key:'atout',label:'AT出力回転',           unit:'rpm', dp:0, src:'A', f:d=>d.length>7 ? ((d[6]<<8)|d[7])/4 : null},
  {key:'gear', label:'停車中にR/Dが入っている(1=はい)', unit:'', dp:0, src:'A', f:d=>d.length>99 ? (d[99] < 150 ? 1 : 0) : null},
 ];
-let ALL = [...PIDS, VOLT, SLOPE, VIB, ...SUZUKI];
+let ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI];
 function addExtras(ids){
  for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
- ALL = [...PIDS, VOLT, SLOPE, VIB, ...SUZUKI];
+ ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI];
  try{ localStorage.setItem('palette_obd2_extra', JSON.stringify(PIDS.map(p=>p.id))); }catch(e){}
 }
 
@@ -509,11 +512,13 @@ let cycle = 0, misses = 0;
 async function loop(){
  while(running){
   const row = {time:new Date()};
-  const slowTurn = cycle % 5 === 0; cycle++;
+  const stopMode = nearStop();                       // 減速して止まる前後20秒は、大事な項目だけ最速で読む
+  const slowTurn = !stopMode && cycle % 5 === 0; cycle++;
   for(const p of PIDS){
    if(!running) break;
    if(!supported.has(p.id)) continue;
-   if(!slowTurn && !FAST.has(p.id)){ row[p.key] = latest[p.key]; continue; }   // 前回の値を引き継ぐ
+   const want = stopMode ? STOPFAST.has(p.id) : (slowTurn || FAST.has(p.id));
+   if(!want){ row[p.key] = latest[p.key]; continue; }   // 前回の値を引き継ぐ
    const b = parsePid(await cmd('01'+p.id), p.id);
    const v = b ? p.f(b[0], b[1]) : null;
    show(p, v); row[p.key] = v;
@@ -527,6 +532,8 @@ async function loop(){
   row.volt = latest.volt;
   for(const p of SUZUKI) row[p.key] = latest[p.key];
   row.vib = vibTake(); show(VIB, row.vib);
+  row.air = airGs(row); show(AIR, row.air);
+  if(stopMode) row.hr = 1;
   if(row.rpm==null && row.speed==null){            // 読めなかった回は記録しない
    misses++;
    if(misses % 3 === 0){ log('読めない状態が続くので通信を立て直します'); await recoverElm(); if(misses >= 9) suzukiOK = false; }
@@ -542,6 +549,27 @@ async function loop(){
   if(samples.length % 30 === 0) saveLog();
   $('meta').textContent = $('meta').textContent.split(' / 記録')[0] + ` / 記録 ${samples.length}件`;
  }
+}
+// 吸入空気量（推定 g/s）：吸気管圧力・回転数・吸気温から計算（エアフロメーターがない車と同じ計算）
+function airGs(r){
+ if(r.rpm==null || r.map==null || r.rpm<100) return r.rpm===0 ? 0 : null;
+ const T = (r.iat==null ? 30 : r.iat) + 273.15;
+ return (r.map*1000) * (0.658/1000) * 0.80 * (r.rpm/120) / (287.05*T) * 1000;
+}
+// 減速して止まりかけ（30km/h以下で速度が落ちている）か、止まってから20秒以内なら true
+function nearStop(){
+ const n = samples.length; if(n<2) return false;
+ const a = samples[n-1], b = samples[n-2];
+ if(a.speed!=null && a.speed>0 && b.speed!=null && a.speed<b.speed){
+  if(a.speed<=30) return true;
+  const dt = (a.time-b.time)/1000;
+  if(dt>0 && (b.speed-a.speed)/dt >= 5) return true;       // 速い速度からの急減速も最速で読む
+ }
+ if(a.speed===0){
+  let since = +a.time; for(let i=n-1;i>=0 && samples[i].speed===0;i--) since = +samples[i].time;
+  return Date.now()-since < 20000;
+ }
+ return false;
 }
 // ===== 通信の立て直し（アダプターを初期状態に戻して設定し直す） =====
 async function recoverElm(){
@@ -579,10 +607,30 @@ function addEvent(t, type, text){
  $('evOut').textContent = '検出：' + events.slice(-4).map(e=>new Date(e.t).toLocaleTimeString('ja-JP')+' '+e.text).join(' ／ ');
  toast('📍 '+text);
 }
+let hardStop = null;   // 急減速で止まった直後の様子を追いかける
+function hardStopStep(row, prev, t){
+ if(hardStop){
+  if(row.speed===0 && t-hardStop.t<6000){ if(row.rpm<hardStop.min) hardStop.min = row.rpm; }
+  else { const h = hardStop; hardStop = null;
+   addEvent(h.t,'hardstop',`急減速で停車（${h.from}km/h→0を${h.sec.toFixed(1)}秒・直前の最大吸気圧${h.map}kPa）直後の最低回転 ${Math.round(h.min)}rpm`); }
+ }
+ if(!hardStop && row.speed===0 && prev.speed>0){
+  let ref = null, mx = 0;
+  for(let i=samples.length-1;i>=0;i--){ const s = samples[i], d = t-s.time;
+   if(d>10000) break;
+   if(s.map!=null && s.map>mx) mx = s.map;
+   if(!ref && d>=2500 && d<=6000 && s.speed!=null) ref = s;
+  }
+  if(ref){ const sec = (t-ref.time)/1000;
+   if(ref.speed>=15 && ref.speed/sec>=6) hardStop = {t, from:Math.round(ref.speed), sec, map:Math.round(mx), min:row.rpm}; }
+ }
+}
 function detect(row){
  const prev = samples[samples.length-1];
  if(!prev || row.rpm==null || prev.rpm==null || row.time-prev.time>10000) return;
- const t = +row.time, mt = meter.minThr, offPedal = r => r.throttle==null || mt==null || r.throttle <= mt+1.5;
+ const t = +row.time;
+ hardStopStep(row, prev, t);
+ const mt = meter.minThr, offPedal = r => r.throttle==null || mt==null || r.throttle <= mt+1.5;
  if(prev.rpm>400 && row.rpm<300) addEvent(t,'stall','エンジン停止（エンスト？）');
  else if(row.speed===0 && prev.speed===0 && row.rpm>=300 && row.rpm<650) addEvent(t,'dip',`アイドリング落ち込み ${Math.round(row.rpm)}rpm`);
  else if(row.speed===0 && prev.speed===0 && offPedal(row) && offPedal(prev) && Math.abs(row.rpm-prev.rpm)>=120)
@@ -940,7 +988,7 @@ function downsample(rows, max){
 function csvText(rows){
  const keys = ALL.filter(p=>rows.some(r=>r[p.key]!=null));
  const head = ['時刻',...keys.map(p=>`${p.label}(${p.unit})`)].join(',');
- return [head, ...rows.map(r=>[r.time.toLocaleTimeString('ja-JP'),...keys.map(p=>fmt(r[p.key],p))].join(','))].join('\n');
+ return [head, ...rows.map(r=>[r.time.toLocaleTimeString('ja-JP')+(r.hr?'.'+Math.floor(r.time.getMilliseconds()/100):''),...keys.map(p=>fmt(r[p.key],p))].join(','))].join('\n');
 }
 async function copy(text){
  if(!text){ toast('まだデータがありません'); return; }
