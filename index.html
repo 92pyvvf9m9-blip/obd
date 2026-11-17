@@ -202,6 +202,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <div id="trips" hidden>
  <div class="dbar"><button id="tBack">← 戻る</button><button id="tPrev">◀</button><span id="tDate" style="font-weight:700;color:var(--text)"></span><button id="tNext">▶</button></div>
  <div class="dbar"><select id="tSel"></select></div>
+ <div class="dbar" style="flex-wrap:wrap"><button id="pHome" hidden>🏠 自宅を設定</button><button id="pCopy"></button><button id="pTiles"></button><button id="pPin" hidden></button><button id="pWipe">位置を全部消す</button></div>
  <div id="tWrap"><canvas id="tCanvas"></canvas><div id="tZoom"><button id="tZin">＋</button><button id="tZout">－</button><button id="tZfit" class="s">全体</button></div></div>
  <div class="hint" style="margin:2px 0 0">地図 © OpenStreetMap　／　緑＝出発　黒＝到着　赤の番号＝異変・印（タップで詳細）　指2本で拡大・1本で移動　線の色：青＝ゆっくり〜赤＝速い</div>
  <div id="tInfo"></div>
@@ -552,7 +553,9 @@ async function loop(){
   for(const p of SUZUKI) row[p.key] = latest[p.key];
   row.vib = vibTake(); show(VIB, row.vib);
   row.air = airGs(row); show(AIR, row.air);
-  { const g = gpsNow(); if(g){ row.lat = g.lat; row.lon = g.lon; trkAdd(row); } }
+  { const g = gpsNow(); if(g){ row.lat = g.lat; row.lon = g.lon; trkAdd(row);
+     if(!gps.named0){ gps.named0=1; placeLookup(g); }
+     if(!gps.lastName || Date.now()-gps.lastName>120000){ gps.lastName=Date.now(); placeLookup(g); } } }
   if(stopMode) row.hr = 1;
   if(row.rpm==null && row.speed==null){            // 読めなかった回は記録しない
    misses++;
@@ -617,6 +620,19 @@ async function readSuzuki(){
  finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); }
 }
 
+// ===== プライバシー設定 =====
+const PRVKEY='palette_obd2_priv';
+let prv=(()=>{ let o; try{ o=Object.assign({home:null, radius:400, copyLoc:true, tiles:true, pin:null}, JSON.parse(localStorage.getItem(PRVKEY))||{}); }catch(e){ o={home:null, radius:400, copyLoc:true, tiles:true, pin:null}; }
+ if(!o.v){ o.v=2; o.copyLoc=true; o.home=null; o.pin=null; try{ localStorage.setItem(PRVKEY, JSON.stringify(o)); }catch(e){} }   // 暗証番号なし・自宅も記録・コピーに位置を入れる
+ return o; })();
+function prvSave(){ try{ localStorage.setItem(PRVKEY, JSON.stringify(prv)); }catch(e){} }
+function inHome(lat,lon){ return prv.home && distM(prv.home.lat,prv.home.lon,lat,lon) < prv.radius; }
+async function pinHash(p){
+ const s='palette-sw:'+p;
+ try{ const b=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+ catch(e){ let h=5381; for(const c of s) h=((h<<5)+h+c.charCodeAt(0))|0; return 'x'+h; }
+}
+
 // ===== 位置情報（どこで起きたか） =====
 const gps = {pos:null, watch:null};
 function gpsStart(){
@@ -628,8 +644,34 @@ function gpsStart(){
    {enableHighAccuracy:true, maximumAge:3000, timeout:20000});
  }catch(e){ log('位置情報: '+(e.message||e)); }
 }
-function gpsNow(){ return gps.pos && Date.now()-gps.pos.t < 15000 ? {lat:+gps.pos.lat.toFixed(5), lon:+gps.pos.lon.toFixed(5)} : null; }
+function gpsNow(){
+ if(!gps.pos || Date.now()-gps.pos.t >= 15000) return null;
+ if(inHome(gps.pos.lat, gps.pos.lon)) return null;   // 自宅のまわりは記録しない
+ return {lat:+gps.pos.lat.toFixed(5), lon:+gps.pos.lon.toFixed(5)};
+}
 const mapUrl = p => `https://maps.google.com/?q=${p.lat},${p.lon}`;
+// 場所の名前（住所）を調べる：OpenStreetMapの無料サービス。1秒に1回まで・結果は覚えておく
+const PLACEKEY='palette_obd2_places';
+let placeCache=(()=>{ try{ return JSON.parse(localStorage.getItem(PLACEKEY))||{}; }catch(e){ return {}; } })();
+const placeQ=[]; let placeBusy=false;
+const pkey = p => `${(+p.lat).toFixed(4)},${(+p.lon).toFixed(4)}`;
+function placeOf(p){ return p ? placeCache[pkey(p)] || null : null; }
+function placeLookup(p){
+ if(!p || placeCache[pkey(p)] || placeQ.some(q=>pkey(q)===pkey(p))) return;
+ placeQ.push({lat:p.lat, lon:p.lon}); placeRun();
+}
+async function placeRun(){
+ if(placeBusy || !placeQ.length) return; placeBusy=true;
+ const p=placeQ.shift();
+ try{
+  const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${p.lat}&lon=${p.lon}&zoom=17&accept-language=ja`);
+  const j=await r.json(), a=j.address||{};
+  const name=[a.city||a.town||a.village||a.county, a.city_district||a.suburb, a.neighbourhood||a.quarter, a.road].filter(Boolean).join(' ') || j.display_name || '';
+  if(name){ placeCache[pkey(p)]=name; const k=Object.keys(placeCache); while(k.length>400) delete placeCache[k.shift()]; try{ localStorage.setItem(PLACEKEY, JSON.stringify(placeCache)); }catch(e){} }
+ }catch(e){ log('場所の名前: '+(e.message||e)); }
+ setTimeout(()=>{ placeBusy=false; placeRun(); }, 1100);
+}
+function locText(p){ if(!p) return ''; const n=placeOf(p); return `　場所 ${n?n+' ':''}(${p.lat},${p.lon}) ${mapUrl(p)}`; }
 function routeUrl(){
  const pts = samples.filter((r,i,a)=>r.lat!=null && !(i>0 && a[i-1].lat===r.lat && a[i-1].lon===r.lon));
  if(pts.length<2) return null;
@@ -673,7 +715,18 @@ function tripKm(pts){ let m=0; for(let i=1;i<pts.length;i++) m+=distM(pts[i-1][1
 const hm = t => new Date(t).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
 function wx(lon,z){ return (lon+180)/360*256*2**z; }
 function wy(lat,z){ const s=Math.sin(lat*Math.PI/180); return (0.5-Math.log((1+s)/(1-s))/(4*Math.PI))*256*2**z; }
-function tripsOpen(){
+async function tripsOpen(){
+ if(prv.pin){
+  const p = prompt('暗証番号を入れてください');
+  if(p==null) return;
+  if(await pinHash(p)!==prv.pin){
+   if(confirm('暗証番号が違います。\n忘れた場合は、位置の記録を全部消せば開けるようになります。消しますか？')){
+    trk={days:{}}; trkDirty=1; trkSave(); for(const r of samples){ delete r.lat; delete r.lon; } for(const e of events) e.pos=null; saveLog();
+    prv.pin=null; prvSave(); toast('位置の記録を消して、暗証番号を外しました');
+   } else return;
+  }
+ }
+ prvButtons();
  trkSave();
  const keys=Object.keys(trk.days).sort();
  tv.day = keys.includes(dayKey(Date.now())) ? dayKey(Date.now()) : (keys[keys.length-1]||dayKey(Date.now()));
@@ -717,6 +770,7 @@ function tripsDraw(pts, evs){
  for(let tx=Math.floor(ox/ts); tx<=Math.floor((ox+W)/ts); tx++) for(let ty=Math.floor(oy/ts); ty<=Math.floor((oy+H)/ts); ty++){
   if(ty<0||ty>=n) continue;
   const key=`${zi}/${((tx%n)+n)%n}/${ty}`; let im=tileCache[key];
+  if(!prv.tiles) continue;
   if(!im){ im=new Image(); im.onload=()=>{ if(!$('trips').hidden) tripsDraw(tv.pts, tv.evsDraw); }; im.src=`https://tile.openstreetmap.org/${key}.png`; tileCache[key]=im; }
   if(im.complete && im.naturalWidth) g.drawImage(im, tx*ts-ox, ty*ts-oy, ts+0.5, ts+0.5);
  }
@@ -784,7 +838,7 @@ const lastEv = {};
 function addEvent(t, type, text){
  if(lastEv[type] && t - lastEv[type] < 15000) return;
  lastEv[type] = t;
- { const pos=gpsNow(); events.push({t, text, pos}); if(events.length>60) events.shift(); trkEvent(t, text, pos); }
+ { const pos=gpsNow(); events.push({t, text, pos}); if(events.length>60) events.shift(); trkEvent(t, text, pos); if(pos && !text.startsWith('iPhoneの角度')) placeLookup(pos); }
  $('evOut').textContent = '検出：' + events.slice(-4).map(e=>new Date(e.t).toLocaleTimeString('ja-JP')+' '+e.text).join(' ／ ');
  toast('📍 '+text);
 }
@@ -1034,11 +1088,16 @@ function summaryText(){
  }
  L.push('');
  L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
- { const ru = routeUrl(); L.push(ru ? '走った道（地図）: '+ru : '走った道（地図）: 位置情報なし（Bluefyの位置情報を「許可」にすると記録されます）'); }
+ if(prv.copyLoc){
+  const ru = routeUrl(); L.push(ru ? '走った道（地図）: '+ru : '走った道（地図）: 位置情報なし');
+  const g = samples.filter(r=>r.lat!=null);
+  if(g.length){ const a={lat:g[0].lat,lon:g[0].lon}, z={lat:g[g.length-1].lat,lon:g[g.length-1].lon};
+   L.push(`出発地点:${locText(a)}`); L.push(`いまの地点:${locText(z)}`); }
+ }
  L.push(''); for(const x of idleStats()) L.push(x);
  if(events.length){
   L.push(''); L.push('【検出した異変・印】');
-  for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}${e.pos?'　地図 '+mapUrl(e.pos):''}`);
+  for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}${e.pos&&prv.copyLoc?locText(e.pos):''}`);
   for(const e of events.slice(-5)){
    const back = e.text.startsWith('手動の印') ? 120000 : 25000;
    const rows = samples.filter(r=>r.time>=e.t-back && r.time<=e.t+10000);
@@ -1172,7 +1231,9 @@ function downsample(rows, max){
 function csvText(rows){
  const keys = ALL.filter(p=>rows.some(r=>r[p.key]!=null));
  const head = ['時刻',...keys.map(p=>`${p.label}(${p.unit})`)].join(',');
- return [head, ...rows.map(r=>[r.time.toLocaleTimeString('ja-JP')+(r.hr?'.'+Math.floor(r.time.getMilliseconds()/100):''),...keys.map(p=>fmt(r[p.key],p))].join(','))].join('\n');
+ const geo = prv.copyLoc && rows.some(r=>r.lat!=null);
+ const h = geo ? head+',緯度,経度' : head;
+ return [h, ...rows.map(r=>[r.time.toLocaleTimeString('ja-JP')+(r.hr?'.'+Math.floor(r.time.getMilliseconds()/100):''),...keys.map(p=>fmt(r[p.key],p)),...(geo?[r.lat??'-',r.lon??'-']:[])].join(','))].join('\n');
 }
 async function copy(text){
  if(!text){ toast('まだデータがありません'); return; }
@@ -1560,6 +1621,39 @@ $('btnHunt').onclick = ()=>withPause(hunt);
 $('btnAuto').onclick = ()=>withPause(fullAuto);
 $('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
 $('btnTrips').onclick = tripsOpen;
+function prvButtons(){
+ $('pHome').textContent = prv.home ? '🏠 自宅の範囲：設定済み（押すと解除）' : '🏠 今いる場所を自宅に設定';
+ $('pCopy').textContent = 'コピーに位置：' + (prv.copyLoc ? '入れる' : '入れない');
+ $('pTiles').textContent = '背景の地図：' + (prv.tiles ? 'ON' : 'OFF');
+ $('pPin').textContent = prv.pin ? '🔒 暗証番号：あり（押すと解除）' : '🔓 暗証番号をつける';
+}
+function purgeHome(){
+ for(const k of Object.keys(trk.days)){ const d=trk.days[k]; d.pts=d.pts.filter(p=>!inHome(p[1],p[2])); d.ev=d.ev.filter(e=>!inHome(e.lat,e.lon)); }
+ for(const r of samples) if(r.lat!=null && inHome(r.lat,r.lon)){ delete r.lat; delete r.lon; }
+ for(const e of events) if(e.pos && inHome(e.pos.lat,e.pos.lon)) e.pos=null;
+ trkDirty=1; trkSave(); saveLog();
+}
+$('pHome').onclick = ()=>{
+ if(prv.home){ if(!confirm('自宅の範囲を解除しますか？（これから自宅のまわりも記録されます）')) return; prv.home=null; prvSave(); prvButtons(); toast('解除しました'); return; }
+ const set = (lat,lon)=>{ prv.home={lat,lon}; prvSave(); purgeHome(); prvButtons(); tripsRender(); toast('自宅から半径'+prv.radius+'mは記録しません（今までの分も消しました）'); };
+ if(gps.pos && Date.now()-gps.pos.t<60000) return set(gps.pos.lat, gps.pos.lon);
+ if(!navigator.geolocation){ toast('位置情報が使えません'); return; }
+ navigator.geolocation.getCurrentPosition(p=>set(p.coords.latitude,p.coords.longitude), e=>toast('位置が取れませんでした: '+(e.message||e.code)), {enableHighAccuracy:true, timeout:20000});
+};
+$('pCopy').onclick = ()=>{ prv.copyLoc=!prv.copyLoc; prvSave(); prvButtons(); toast(prv.copyLoc?'Claude用コピーに地図リンクを入れます':'Claude用コピーに位置は入れません'); };
+$('pTiles').onclick = ()=>{ prv.tiles=!prv.tiles; prvSave(); prvButtons(); tripsDraw(tv.pts||[], tv.evsDraw||[]); };
+$('pPin').onclick = async ()=>{
+ if(prv.pin){ const p=prompt('今の暗証番号を入れてください'); if(p==null) return; if(await pinHash(p)!==prv.pin){ toast('暗証番号が違います'); return; } prv.pin=null; prvSave(); prvButtons(); toast('暗証番号を外しました'); return; }
+ const a=prompt('新しい暗証番号（4けた以上）'); if(a==null) return; if(a.length<4){ toast('4けた以上にしてください'); return; }
+ const b=prompt('確認のため、もう一度入れてください'); if(b!==a){ toast('一致しませんでした'); return; }
+ prv.pin=await pinHash(a); prvSave(); prvButtons(); toast('暗証番号をつけました（忘れたら「位置を全部消す」しか戻せません）');
+};
+$('pWipe').onclick = ()=>{
+ if(!confirm('保存されている位置の記録（走った道・異変の場所）を全部消します。よろしいですか？')) return;
+ trk={days:{}}; trkDirty=1; trkSave();
+ for(const r of samples){ delete r.lat; delete r.lon; } for(const e of events) e.pos=null;
+ saveLog(); tv.cam=null; tripsRender(); toast('位置の記録を全部消しました');
+};
 $('tBack').onclick = ()=>{ $('trips').hidden=true; };
 $('tPrev').onclick = ()=>{ const k=Object.keys(trk.days).sort(), i=k.indexOf(tv.day); if(i>0){ tv.day=k[i-1]; tv.trip=-1; tv.sel=-1; tripsRender(); } };
 $('tNext').onclick = ()=>{ const k=Object.keys(trk.days).sort(), i=k.indexOf(tv.day); if(i>=0&&i<k.length-1){ tv.day=k[i+1]; tv.trip=-1; tv.sel=-1; tripsRender(); } };
