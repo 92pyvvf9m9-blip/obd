@@ -533,6 +533,7 @@ async function loop(){
   for(const p of SUZUKI) row[p.key] = latest[p.key];
   row.vib = vibTake(); show(VIB, row.vib);
   row.air = airGs(row); show(AIR, row.air);
+  { const g = gpsNow(); if(g){ row.lat = g.lat; row.lon = g.lon; } }
   if(stopMode) row.hr = 1;
   if(row.rpm==null && row.speed==null){            // 読めなかった回は記録しない
    misses++;
@@ -597,13 +598,34 @@ async function readSuzuki(){
  finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); }
 }
 
+// ===== 位置情報（どこで起きたか） =====
+const gps = {pos:null, watch:null};
+function gpsStart(){
+ if(!navigator.geolocation || gps.watch!=null) return;
+ try{
+  gps.watch = navigator.geolocation.watchPosition(
+   p=>{ gps.pos = {lat:p.coords.latitude, lon:p.coords.longitude, acc:p.coords.accuracy, t:Date.now()}; },
+   e=>{ log('位置情報: '+(e.message||e.code)); if(e.code===1){ try{ navigator.geolocation.clearWatch(gps.watch); }catch(_){} gps.watch=null; } },
+   {enableHighAccuracy:true, maximumAge:3000, timeout:20000});
+ }catch(e){ log('位置情報: '+(e.message||e)); }
+}
+function gpsNow(){ return gps.pos && Date.now()-gps.pos.t < 15000 ? {lat:+gps.pos.lat.toFixed(5), lon:+gps.pos.lon.toFixed(5)} : null; }
+const mapUrl = p => `https://maps.google.com/?q=${p.lat},${p.lon}`;
+function routeUrl(){
+ const pts = samples.filter((r,i,a)=>r.lat!=null && !(i>0 && a[i-1].lat===r.lat && a[i-1].lon===r.lon));
+ if(pts.length<2) return null;
+ const n = Math.min(10, pts.length), out=[];
+ for(let i=0;i<n;i++){ const r = pts[Math.round(i*(pts.length-1)/(n-1))]; out.push(`${r.lat},${r.lon}`); }
+ return 'https://www.google.com/maps/dir/'+out.join('/');
+}
+
 // ===== 異変の自動検出 =====
 let events = [];
 const lastEv = {};
 function addEvent(t, type, text){
  if(lastEv[type] && t - lastEv[type] < 15000) return;
  lastEv[type] = t;
- events.push({t, text}); if(events.length>60) events.shift();
+ events.push({t, text, pos:gpsNow()}); if(events.length>60) events.shift();
  $('evOut').textContent = '検出：' + events.slice(-4).map(e=>new Date(e.t).toLocaleTimeString('ja-JP')+' '+e.text).join(' ／ ');
  toast('📍 '+text);
 }
@@ -702,6 +724,7 @@ async function afterTransport(kind){
  connected = true; setExtButtons(false);
  running = true; setStatus(kind==='demo'?'デモ実行中':'接続中','on');
  try{ await navigator.wakeLock?.request('screen'); }catch(e){}
+ gpsStart();
  cycle = 0;
  loopPromise = loop();
 }
@@ -852,10 +875,11 @@ function summaryText(){
  }
  L.push('');
  L.push('【走行まとめ】'); for(const x of tripStats()) L.push(x);
+ { const ru = routeUrl(); L.push(ru ? '走った道（地図）: '+ru : '走った道（地図）: 位置情報なし（Bluefyの位置情報を「許可」にすると記録されます）'); }
  L.push(''); for(const x of idleStats()) L.push(x);
  if(events.length){
   L.push(''); L.push('【検出した異変・印】');
-  for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}`);
+  for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}${e.pos?'　地図 '+mapUrl(e.pos):''}`);
   for(const e of events.slice(-5)){
    const back = e.text.startsWith('手動の印') ? 120000 : 25000;
    const rows = samples.filter(r=>r.time>=e.t-back && r.time<=e.t+10000);
