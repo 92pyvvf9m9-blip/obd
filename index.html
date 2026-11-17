@@ -49,7 +49,11 @@ select,input{flex:1;min-width:0;background:var(--panel);color:var(--text);border
 #scanProg.big{font-size:19px;font-weight:700;color:var(--accent);background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:12px;position:sticky;top:8px;z-index:5}
 #trips{position:fixed;inset:0;background:var(--bg);z-index:55;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 6px) 8px calc(env(safe-area-inset-bottom) + 6px)}
 #trips .dbar select{flex:1;min-width:0;padding:8px;font-size:14px}
-#tCanvas{width:100%;height:56vh;border-radius:12px;background:#dfe6e9;display:block;touch-action:manipulation}
+#tWrap{position:relative}
+#tCanvas{width:100%;height:56vh;border-radius:12px;background:#dfe6e9;display:block;touch-action:none}
+#tZoom{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:6px}
+#tZoom button{width:44px;height:44px;padding:0;font-size:22px;font-weight:700;background:rgba(255,255,255,.92);color:#222;border:1px solid #bbb;border-radius:10px}
+#tZoom button.s{font-size:12px}
 #tInfo{font-size:13px;line-height:1.7;overflow:auto;flex:1;margin-top:6px;color:var(--text)}
 #tInfo a{color:var(--accent)}
 #tInfo .ev{padding:4px 0;border-bottom:1px solid var(--line)}
@@ -198,8 +202,8 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <div id="trips" hidden>
  <div class="dbar"><button id="tBack">← 戻る</button><button id="tPrev">◀</button><span id="tDate" style="font-weight:700;color:var(--text)"></span><button id="tNext">▶</button></div>
  <div class="dbar"><select id="tSel"></select></div>
- <canvas id="tCanvas"></canvas>
- <div class="hint" style="margin:2px 0 0">地図 © OpenStreetMap　／　緑＝出発　黒＝到着　赤の番号＝異変・印（タップで詳細）　線の色：青＝ゆっくり〜赤＝速い</div>
+ <div id="tWrap"><canvas id="tCanvas"></canvas><div id="tZoom"><button id="tZin">＋</button><button id="tZout">－</button><button id="tZfit" class="s">全体</button></div></div>
+ <div class="hint" style="margin:2px 0 0">地図 © OpenStreetMap　／　緑＝出発　黒＝到着　赤の番号＝異変・印（タップで詳細）　指2本で拡大・1本で移動　線の色：青＝ゆっくり〜赤＝速い</div>
  <div id="tInfo"></div>
 </div>
 <script>
@@ -655,7 +659,7 @@ function trkAdd(row){
  if(++trkDirty>=15) trkSave();
 }
 function trkEvent(t,text,pos){
- if(!pos) return; trkDay(dayKey(t)).ev.push({t,text,lat:pos.lat,lon:pos.lon}); trkDirty++; trkSave();
+ if(!pos || text.startsWith('iPhoneの角度')) return; trkDay(dayKey(t)).ev.push({t,text,lat:pos.lat,lon:pos.lon}); trkDirty++; trkSave();
 }
 // --- 表示 ---
 const tv={day:null, trip:-1, sel:-1, view:null};
@@ -685,41 +689,85 @@ function tripsRender(){
  const pts = tv.trip<0 ? d.pts : (trips[tv.trip]||[]);
  const t0=pts.length?pts[0][0]:0, t1=pts.length?pts[pts.length-1][0]:0;
  const evs = d.ev.filter(e=> tv.trip<0 || (e.t>=t0-60000 && e.t<=t1+60000));
+ if(tv.lastKey!==tv.day+'/'+tv.trip){ tv.cam=null; tv.lastKey=tv.day+'/'+tv.trip; }
  tripsDraw(pts, evs);
  $('tInfo').innerHTML = !pts.length ? '<div class="hint">この日の位置の記録はありません。接続した時に位置情報を「許可」にすると記録されます。</div>' :
   (evs.length ? evs.map((e,k)=>`<div class="ev${k===tv.sel?' sel':''}" data-k="${k}"><b style="color:#e74c3c">${k+1}</b>　${hm(e.t)}　${e.text}　<a href="${mapUrl(e)}" target="_blank">地図で開く</a></div>`).join('') : '<div class="hint">この区間に異変・印はありません。</div>');
  tv.evs=evs;
 }
+function x2lon(x,z){ return x/(256*2**z)*360-180; }
+function y2lat(y,z){ return Math.atan(Math.sinh(Math.PI*(1-2*y/(256*2**z))))*180/Math.PI; }
 function tripsDraw(pts, evs){
+ tv.pts=pts; tv.evsDraw=evs;
  const cv=$('tCanvas'), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=cv.clientHeight;
- cv.width=W*dpr; cv.height=H*dpr; const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+ if(cv.width!==Math.round(W*dpr) || cv.height!==Math.round(H*dpr)){ cv.width=W*dpr; cv.height=H*dpr; }
+ const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
  g.fillStyle='#dfe6e9'; g.fillRect(0,0,W,H);
  const all=pts.map(p=>[p[1],p[2]]).concat(evs.map(e=>[e.lat,e.lon]));
  if(!all.length){ g.fillStyle='#555'; g.font='14px sans-serif'; g.fillText('記録なし',W/2-28,H/2); tv.view=null; return; }
- let la0=Math.min(...all.map(a=>a[0])), la1=Math.max(...all.map(a=>a[0])), lo0=Math.min(...all.map(a=>a[1])), lo1=Math.max(...all.map(a=>a[1]));
- let z=17; while(z>3 && (wx(lo1,z)-wx(lo0,z) > W-40 || wy(la0,z)-wy(la1,z) > H-40)) z--;
- const cx=(wx(lo0,z)+wx(lo1,z))/2, cy=(wy(la0,z)+wy(la1,z))/2, ox=cx-W/2, oy=cy-H/2;
- const X=lon=>wx(lon,z)-ox, Y=lat=>wy(lat,z)-oy;
- tv.view={X,Y};
- const n=2**z;
- for(let tx=Math.floor(ox/256); tx<=Math.floor((ox+W)/256); tx++) for(let ty=Math.floor(oy/256); ty<=Math.floor((oy+H)/256); ty++){
-  if(ty<0||ty>=n) continue;
-  const key=`${z}/${((tx%n)+n)%n}/${ty}`; let im=tileCache[key];
-  if(!im){ im=new Image(); im.onload=()=>{ if(!$('trips').hidden) tripsRender(); }; im.src=`https://tile.openstreetmap.org/${key}.png`; tileCache[key]=im; }
-  if(im.complete && im.naturalWidth) g.drawImage(im, tx*256-ox, ty*256-oy, 256, 256);
+ if(!tv.cam){
+  const la0=Math.min(...all.map(a=>a[0])), la1=Math.max(...all.map(a=>a[0])), lo0=Math.min(...all.map(a=>a[1])), lo1=Math.max(...all.map(a=>a[1]));
+  let z=17; while(z>3 && (wx(lo1,z)-wx(lo0,z) > W-60 || wy(la0,z)-wy(la1,z) > H-60)) z--;
+  tv.cam={lat:y2lat((wy(la0,z)+wy(la1,z))/2,z), lon:x2lon((wx(lo0,z)+wx(lo1,z))/2,z), z};
  }
- // route
+ const z=tv.cam.z, ox=wx(tv.cam.lon,z)-W/2, oy=wy(tv.cam.lat,z)-H/2;
+ const X=lon=>wx(lon,z)-ox, Y=lat=>wy(lat,z)-oy;
+ tv.view={X,Y,W,H,ox,oy,z};
+ const zi=Math.max(0,Math.min(19,Math.floor(z))), sc=2**(z-zi), ts=256*sc, n=2**zi;
+ for(let tx=Math.floor(ox/ts); tx<=Math.floor((ox+W)/ts); tx++) for(let ty=Math.floor(oy/ts); ty<=Math.floor((oy+H)/ts); ty++){
+  if(ty<0||ty>=n) continue;
+  const key=`${zi}/${((tx%n)+n)%n}/${ty}`; let im=tileCache[key];
+  if(!im){ im=new Image(); im.onload=()=>{ if(!$('trips').hidden) tripsDraw(tv.pts, tv.evsDraw); }; im.src=`https://tile.openstreetmap.org/${key}.png`; tileCache[key]=im; }
+  if(im.complete && im.naturalWidth) g.drawImage(im, tx*ts-ox, ty*ts-oy, ts+0.5, ts+0.5);
+ }
+ const lw = Math.max(3, Math.min(7, (z-10)*0.9));
  g.lineCap='round'; g.lineJoin='round';
  for(const pass of [0,1]) for(let i=1;i<pts.length;i++){
   const a=pts[i-1], b=pts[i]; if(b[0]-a[0]>5*60000) continue;
   const v=Math.min(1,(b[3]||0)/60);
-  g.strokeStyle = pass ? `hsl(${220-220*v},85%,45%)` : '#fff'; g.lineWidth = pass ? 4 : 8;
+  g.strokeStyle = pass ? `hsl(${220-220*v},85%,45%)` : '#fff'; g.lineWidth = pass ? lw : lw+4;
   g.beginPath(); g.moveTo(X(a[2]),Y(a[1])); g.lineTo(X(b[2]),Y(b[1])); g.stroke();
  }
  const dot=(x,y,r,c)=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(x,y,r+2,0,7); g.fill(); g.fillStyle=c; g.beginPath(); g.arc(x,y,r,0,7); g.fill(); };
  if(pts.length){ dot(X(pts[0][2]),Y(pts[0][1]),7,'#27ae60'); const l=pts[pts.length-1]; dot(X(l[2]),Y(l[1]),7,'#222'); }
  evs.forEach((e,k)=>{ const x=X(e.lon), y=Y(e.lat); dot(x,y,k===tv.sel?13:10,'#e74c3c'); g.fillStyle='#fff'; g.font='bold 12px sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(String(k+1),x,y+0.5); });
- g.textAlign='left'; g.textBaseline='alphabetic'; g.fillStyle='rgba(255,255,255,.8)'; g.font='10px sans-serif'; { const tw=g.measureText('© OpenStreetMap contributors').width+8; g.fillRect(W-tw,H-16,tw,16); g.fillStyle='#333'; g.fillText('© OpenStreetMap contributors',W-tw+4,H-4); }
+ g.textAlign='left'; g.textBaseline='alphabetic'; g.fillStyle='rgba(255,255,255,.8)';
+ g.font='10px sans-serif'; { const tw=g.measureText('© OpenStreetMap contributors').width+8; g.fillRect(W-tw,H-16,tw,16); g.fillStyle='#333'; g.fillText('© OpenStreetMap contributors',W-tw+4,H-4); }
+}
+// 拡大・移動
+function camZoomAt(px,py,dz){
+ const v=tv.view; if(!v) return;
+ const nz=Math.max(3,Math.min(19,tv.cam.z+dz));
+ const wxp=v.ox+px, wyp=v.oy+py, lon=x2lon(wxp,v.z), lat=y2lat(wyp,v.z);
+ const nx=wx(lon,nz)-px+v.W/2, ny=wy(lat,nz)-py+v.H/2;
+ tv.cam={lat:y2lat(ny,nz), lon:x2lon(nx,nz), z:nz}; tripsDraw(tv.pts, tv.evsDraw);
+}
+function camPan(dx,dy){
+ const v=tv.view; if(!v) return;
+ const cx=wx(tv.cam.lon,tv.cam.z)-dx, cy=wy(tv.cam.lat,tv.cam.z)-dy;
+ tv.cam={lat:y2lat(cy,tv.cam.z), lon:x2lon(cx,tv.cam.z), z:tv.cam.z}; tripsDraw(tv.pts, tv.evsDraw);
+}
+const tp={ptr:new Map(), moved:0, d0:0, lastTap:0};
+function tPos(e){ const r=$('tCanvas').getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function tDown(e){ $('tCanvas').setPointerCapture?.(e.pointerId); tp.ptr.set(e.pointerId,tPos(e)); tp.moved=0;
+ if(tp.ptr.size===2){ const [a,b]=[...tp.ptr.values()]; tp.d0=Math.hypot(a.x-b.x,a.y-b.y); } }
+function tMove(e){
+ if(!tp.ptr.has(e.pointerId)) return;
+ const p=tPos(e), old=tp.ptr.get(e.pointerId);
+ if(tp.ptr.size===1){ const dx=p.x-old.x, dy=p.y-old.y; tp.moved+=Math.abs(dx)+Math.abs(dy); tp.ptr.set(e.pointerId,p); if(tp.moved>6) camPan(dx,dy); return; }
+ tp.ptr.set(e.pointerId,p);
+ if(tp.ptr.size===2){
+  const [a,b]=[...tp.ptr.values()], d=Math.hypot(a.x-b.x,a.y-b.y); tp.moved+=99;
+  if(tp.d0>0 && d>0){ camZoomAt((a.x+b.x)/2,(a.y+b.y)/2, Math.log2(d/tp.d0)); tp.d0=d; }
+ }
+}
+function tUp(e){
+ const p=tp.ptr.get(e.pointerId); tp.ptr.delete(e.pointerId);
+ if(tp.ptr.size===0 && p && tp.moved<=6){
+  const now=Date.now();
+  if(now-tp.lastTap<300){ camZoomAt(p.x,p.y,1); tp.lastTap=0; } else { tp.lastTap=now; tripsTap(e); }
+ }
+ if(tp.ptr.size<2) tp.d0=0;
 }
 function tripsTap(ev){
  if(!tv.view||!tv.evs) return;
@@ -1516,7 +1564,14 @@ $('tBack').onclick = ()=>{ $('trips').hidden=true; };
 $('tPrev').onclick = ()=>{ const k=Object.keys(trk.days).sort(), i=k.indexOf(tv.day); if(i>0){ tv.day=k[i-1]; tv.trip=-1; tv.sel=-1; tripsRender(); } };
 $('tNext').onclick = ()=>{ const k=Object.keys(trk.days).sort(), i=k.indexOf(tv.day); if(i>=0&&i<k.length-1){ tv.day=k[i+1]; tv.trip=-1; tv.sel=-1; tripsRender(); } };
 $('tSel').onchange = ()=>{ tv.trip=+$('tSel').value; tv.sel=-1; tripsRender(); };
-$('tCanvas').addEventListener('click', tripsTap);
+$('tCanvas').addEventListener('pointerdown', tDown);
+$('tCanvas').addEventListener('pointermove', tMove);
+$('tCanvas').addEventListener('pointerup', tUp);
+$('tCanvas').addEventListener('pointercancel', e=>{ tp.ptr.delete(e.pointerId); tp.d0=0; });
+$('tCanvas').addEventListener('wheel', e=>{ e.preventDefault(); const p=tPos(e); camZoomAt(p.x,p.y, e.deltaY<0?0.5:-0.5); }, {passive:false});
+$('tZin').onclick = ()=>{ const v=tv.view; v&&camZoomAt(v.W/2,v.H/2,1); };
+$('tZout').onclick = ()=>{ const v=tv.view; v&&camZoomAt(v.W/2,v.H/2,-1); };
+$('tZfit').onclick = ()=>{ tv.cam=null; tripsDraw(tv.pts, tv.evsDraw); };
 $('tInfo').addEventListener('click', e=>{ const d=e.target.closest('.ev'); if(d && e.target.tagName!=='A'){ tv.sel=+d.dataset.k; tripsRender(); } });
 window.addEventListener('resize', ()=>{ if(!$('trips').hidden) tripsRender(); });
 $('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（この前2分のどこかで違和感）'); saveLog(); };
