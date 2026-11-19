@@ -131,6 +131,14 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 </div>
 <div id="dtcOut"></div>
 
+<h2 class="sec">CVT診断（ディーラー診断機ふう）</h2>
+<p class="hint">ミッションのコンピューター（7E1）に直接話しかけて、CVTの中の動きを見ます。読み取り専用です。</p>
+<button class="primary" id="btnCvtMode" style="width:100%;margin:6px 0">⚙️ CVT診断モード：OFF</button>
+<div id="cvtLive" class="hint">CVT：モードOFF</div>
+<button class="ext primary" id="btnCvtTest" style="width:100%;margin:6px 0">🧪 CVT点検（停車中・約70秒・P→R→N→Dのつながり時間を測る）</button>
+<button class="ext" id="btnCvtDtc" style="width:100%;margin:6px 0">🔧 CVTの故障コード・履歴を読む（全方式で総当たり）</button>
+<p class="hint">・<b>CVT診断モードON</b>で走ると、毎回CVTの値も読み、「止まる直前にロックアップが切れない（エンストの原因）」「回転だけ吹け上がる（滑り）」「副変速の切り替わり」を自動で拾って、Claude用コピーに【CVT診断】として入れます。<br>・CVT点検・故障コードの結果は下の「探索結果コピー」で貼ってください。</p>
+
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
@@ -263,10 +271,19 @@ const SUZUKI = [
  {key:'atout',label:'AT出力回転',           unit:'rpm', dp:0, src:'A', f:d=>d.length>7 ? ((d[6]<<8)|d[7])/4 : null},
  {key:'gear', label:'停車中にR/Dが入っている(1=はい)', unit:'', dp:0, src:'A', f:d=>d.length>99 ? (d[99] < 150 ? 1 : 0) : null},
 ];
-let ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI];
+// CVT診断：AT入力・出力回転から計算する値
+const TIRE_M = 1.670;   // 155/65R13 の外周（m）
+const CVTD = [
+ {key:'tcslip', label:'トルコン滑り(エンジン−AT入力)', unit:'rpm', dp:0},
+ {key:'lockup', label:'ロックアップ(1=つながり推定)', unit:'', dp:0},
+ {key:'pratio', label:'プーリー比(AT入力÷AT出力)', unit:'', dp:2},
+ {key:'subr',   label:'後段比(AT出力÷タイヤ回転)', unit:'', dp:2},
+];
+let cvtOn = false; try{ cvtOn = localStorage.getItem('palette_obd2_cvt')==='1'; }catch(e){}
+let ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI, ...CVTD];
 function addExtras(ids){
  for(const e of EXTRA) if(ids.includes(e.id) && !PIDS.some(p=>p.id===e.id)) PIDS.push(e);
- ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI];
+ ALL = [...PIDS, VOLT, AIR, SLOPE, VIB, ...SUZUKI, ...CVTD];
  try{ localStorage.setItem('palette_obd2_extra', JSON.stringify(PIDS.map(p=>p.id))); }catch(e){}
 }
 
@@ -448,7 +465,13 @@ function demoTransport(){
     else if(hdr==='7E0' && c==='221005') r = fr('621005'+h(Math.min(88,40+t*2)+40));
     else if(hdr==='7E0' && c==='22100A') r = fr('62100A'+h(142));
     else if(c==='2100' && hdr==='7E0') r = '7E8100A6100'+h(rpm/32)+'FF7D\r7E821'+h(t)+'5A10FF00000000';
-    else if(c==='2104' && hdr==='7E1') r = fr('6104'+h(60+t/10)+'1A78');
+    else if(c==='2104' && hdr==='7E1'){   // CVT：120バイトの複数フレーム（入力回転・出力回転・R/D判定）
+     const ain = spd>0 ? (spd<12 ? rpm : rpm-30) : 0, aout = spd*1000/60/1.670*(spd<25?1.9:1.0);
+     const b = new Array(120).fill(0); b[0]=(ain*4)>>8&255; b[1]=(ain*4)&255; b[6]=(aout*4)>>8&255; b[7]=(aout*4)&255; b[99]=100; b[20]=Math.min(200,60+t/5);
+     const p = '6104'+b.map(x=>h(x)).join(''), n = p.length/2;
+     const out = ['7E910'+h(n)+p.slice(0,12)]; let k=1; for(let i=12;i<p.length;i+=14){ out.push('7E92'+(k++%16).toString(16).toUpperCase()+p.slice(i,i+14).padEnd(14,'0')); }
+     r = out.join('\r');
+    }
     else if(/^01[0-9A-F]{2}$/.test(c) && hdr==='7E0') r = fr('41'+c.slice(2)+h(rpm/40)+'10');
     else if(c==='2101' && hdr==='7E0') r = fr('6101'+h(rpm/32)+'5A10');
     else if(c==='2105' && hdr==='7E1') r = fr('6105'+h(60+t/10)+'00');
@@ -548,9 +571,11 @@ async function loop(){
    const vr = (await cmd('ATRV')).match(/(\d+(\.\d+)?)\s*V/i);
    show(VOLT, vr ? parseFloat(vr[1]) : null);
    if(isCAN && running && suzukiOK) await readSuzuki();
-  }
+  } else if(cvtOn && isCAN && running && suzukiOK) await readAT();
   row.volt = latest.volt;
   for(const p of SUZUKI) row[p.key] = latest[p.key];
+  if(cvtOn && latest.atraw){ row.atraw = latest.atraw; latest.atraw = null; }
+  cvtDerive(row);
   row.vib = vibTake(); show(VIB, row.vib);
   row.air = airGs(row); show(AIR, row.air);
   { const g = gpsNow(); if(g){ row.lat = g.lat; row.lon = g.lon; trkAdd(row);
@@ -615,9 +640,121 @@ async function readSuzuki(){
    got[src] = await readId('21', id, {tx, rx});
   }
   for(const p of SUZUKI){ const d = got[p.src]; show(p, d ? p.f(d) : null); }
+  latest.atraw = got.A ? got.A.map(x=>hx(x)).join('') : null;
   if(!got.E && !got.A){ if(++suzukiFail >= 3){ suzukiOK = false; log('独自データが読めないので停止'); } } else suzukiFail = 0;
  }catch(e){ log('独自データ: '+(e.message||e)); }
  finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); }
+}
+
+// CVT診断モード：ATだけを毎回読む
+async function readAT(){
+ try{
+  await cmd('ATH1'); await cmd('ATSH7E1'); await cmd('ATCRA7E9');
+  const d = await readId('21','04',{tx:'7E1',rx:'7E9'});
+  for(const p of SUZUKI) if(p.src==='A') show(p, d ? p.f(d) : null);
+  latest.atraw = d ? d.map(x=>hx(x)).join('') : null;
+ }catch(e){ log('AT: '+(e.message||e)); }
+ finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); }
+}
+function cvtDerive(row){
+ const r = row.rpm, i = row.atin, o = row.atout, v = row.speed;
+ const ok = i!=null && o!=null && r!=null;
+ row.tcslip = ok ? r - i : null;
+ row.lockup = ok && v>=5 && i>300 ? (Math.abs(r-i)<=40 ? 1 : 0) : null;
+ row.pratio = ok && o>150 ? i/o : null;
+ const wheel = v!=null ? v*1000/60/TIRE_M : null;
+ row.subr = ok && v>=15 ? o/wheel : null;
+ for(const p of CVTD) show(p, row[p.key]);
+ if(cvtOn) $('cvtLive').textContent = ok
+  ? `CVT：入力${Math.round(i)} / 出力${Math.round(o)}rpm　トルコン滑り${Math.round(r-i)}rpm　${row.lockup===1?'ロックアップON':row.lockup===0?'ロックアップOFF':''}　${row.pratio?'プーリー比'+row.pratio.toFixed(2):''}　${row.subr?'後段比'+row.subr.toFixed(2):''}`
+  : 'CVT：ミッションから応答なし';
+}
+const cvtLog = [];   // 副変速らしき切り替わり
+function cvtDetect(row, prev, t){
+ if(row.atin==null || prev.atin==null) return;
+ // 止まる直前なのに、エンジンとAT入力がくっついたまま（ロックアップが切れていない）
+ if(row.speed>0 && row.speed<=12 && prev.speed>row.speed && row.rpm<850 && Math.abs(row.rpm-row.atin)<=40)
+  addEvent(t,'lockstop',`止まる直前もロックアップがつながったまま（${row.speed}km/h・エンジン${Math.round(row.rpm)}/AT入力${Math.round(row.atin)}rpm）エンストの原因候補`);
+ const dt = (row.time-prev.time)/1000;
+ if(dt>0 && dt<2.5 && row.speed>=15 && prev.speed>=15 && row.atout>0 && prev.atout>0){
+  const outCh = Math.abs(row.atout-prev.atout)/prev.atout;
+  if(row.rpm-prev.rpm>=400 && outCh<0.03 && Math.abs((row.throttle??0)-(prev.throttle??0))<5)
+   addEvent(t,'flare',`回転だけ吹け上がり ${Math.round(prev.rpm)}→${Math.round(row.rpm)}rpm（${row.speed}km/h・アクセル一定）滑り疑い`);
+  if(row.subr && prev.subr && Math.abs(row.subr-prev.subr)/prev.subr>=0.12){
+   cvtLog.push({t, from:prev.subr, to:row.subr, v:row.speed, thr:row.throttle});
+   if(cvtLog.length>80) cvtLog.shift();
+  }
+ }
+}
+function cvtStats(){
+ const rows = samples.filter(r=>r.atin!=null);
+ if(!rows.length) return [];
+ const L = ['【CVT診断（ミッション7E1の値から）】'];
+ const med = a=>{ if(!a.length) return null; const b=[...a].sort((x,y)=>x-y); return b[Math.floor(b.length/2)]; };
+ L.push(`CVTの値が取れた件数: ${rows.length}件`);
+ // 後段比の分布（副変速が2段なら山が2つ出る）
+ const sr = rows.map(r=>r.subr).filter(x=>x!=null);
+ if(sr.length>=10){
+  const bins = {}; for(const x of sr){ const k=(Math.round(x/0.05)*0.05).toFixed(2); bins[k]=(bins[k]||0)+1; }
+  const top = Object.entries(bins).sort((a,b)=>b[1]-a[1]).slice(0,6).sort((a,b)=>a[0]-b[0]);
+  L.push(`後段比の分布（多い順の山）: ${top.map(([k,n])=>k+'×'+n).join(' / ')}（15km/h以上・${sr.length}件）`);
+  const bands = [[15,30],[30,50],[50,80],[80,200]].map(([a,b])=>{ const m=med(rows.filter(r=>r.subr!=null&&r.speed>=a&&r.speed<b).map(r=>r.subr)); return `${a}〜${b}km/h:${m==null?'-':m.toFixed(2)}`; });
+  L.push(`速度別の後段比（中央値）: ${bands.join(' / ')}`);
+ }
+ const pr = rows.map(r=>r.pratio).filter(x=>x!=null);
+ if(pr.length) L.push(`プーリー比: 最小${Math.min(...pr).toFixed(2)} / 最大${Math.max(...pr).toFixed(2)}`);
+ const cruise = rows.filter(r=>r.speed>=40 && r.tcslip!=null);
+ if(cruise.length){ const lk = cruise.filter(r=>r.lockup===1).length;
+  L.push(`40km/h以上でロックアップがつながっていた割合: ${Math.round(lk/cruise.length*100)}%（${cruise.length}件）／トルコン滑り中央値 ${Math.round(med(cruise.map(r=>r.tcslip)))}rpm`); }
+ const stopIn = rows.filter(r=>r.speed>0 && r.speed<=12 && r.tcslip!=null);
+ if(stopIn.length){ const st = stopIn.filter(r=>Math.abs(r.tcslip)<=40 && r.rpm<850).length;
+  L.push(`12km/h以下（止まりかけ）でロックアップがつながったままだった件数: ${st}件 / ${stopIn.length}件`); }
+ const dIdle = rows.filter(r=>r.speed===0 && r.gear===1 && r.rpm>300);
+ if(dIdle.length) L.push(`D/Rで停車中のAT入力回転: 中央値${Math.round(med(dIdle.map(r=>r.atin)))}rpm（0に近ければクラッチ正常につながり）`);
+ if(cvtLog.length){ L.push('後段比が急に変わった瞬間（副変速の切替 or 滑り）:');
+  for(const c of cvtLog.slice(-15)) L.push(`  ${new Date(c.t).toLocaleTimeString('ja-JP')} ${c.from.toFixed(2)}→${c.to.toFixed(2)}（${c.v}km/h・スロットル${c.thr==null?'-':c.thr.toFixed(0)}%）`); }
+ const raw = samples.filter(r=>r.atraw);
+ if(raw.length){ L.push('AT生データ 21 04（解読用・間引き）: 時刻|水温|車速|回転|生16進');
+  const step = Math.max(1, Math.ceil(raw.length/25));
+  for(let i=0;i<raw.length;i+=step){ const r=raw[i]; L.push(`  ${r.time.toLocaleTimeString('ja-JP')}|${r.coolant??'-'}|${r.speed??'-'}|${Math.round(r.rpm??0)}|${r.atraw}`); } }
+ return L;
+}
+// CVT点検：停車中にシフトを動かして、つながるまでの時間を測る
+async function cvtTest(){
+ if(!needCAN()) return;
+ const A={tx:'7E1',rx:'7E9'}, E={tx:'7E0',rx:'7E8'};
+ const steps = [[0,'P・ブレーキを踏んだまま待つ'],[8,'ブレーキを強く踏んで R に入れる'],[18,'N に入れる'],[26,'D に入れる（ブレーキ踏んだまま）'],[36,'N に入れる'],[44,'D に入れる（ブレーキ踏んだまま）'],[54,'R に入れる'],[62,'P に戻す']];
+ extOut('=== CVT点検（つながり時間） ===');
+ extOut('形式: 秒|手順|エンジン回転|AT入力|AT出力|R/D判定|AT生16進');
+ await cmd('ATH1'); await cmd('ATST19');
+ const P = $('scanProg'); P.classList.add('big'); try{ P.scrollIntoView({block:'start'}); }catch(e){}
+ const t0 = Date.now(); let last=-1; const rec=[];
+ try{
+  while(!abortExt){
+   const el=(Date.now()-t0)/1000; if(el>70) break;
+   const st = steps.filter(x=>x[0]<=el).pop();
+   P.textContent = `【${Math.floor(el)}秒／70秒】今やること → ${st[1]}`;
+   if(st[0]!==last){ last=st[0]; toast(st[1]); }
+   await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+   const rb = await readId('01','0C',E); const rpm = rb && rb.length>1 ? ((rb[0]<<8)|rb[1])/4 : null;
+   await cmd('ATSH7E1'); await cmd('ATCRA7E9');
+   const d = await readId('21','04',A);
+   const ai = d&&d.length>1 ? ((d[0]<<8)|d[1])/4 : null, ao = d&&d.length>7 ? ((d[6]<<8)|d[7])/4 : null, g = d&&d.length>99 ? (d[99]<150?1:0) : null;
+   rec.push({el, st:st[0], rpm, ai, ao, g});
+   extOut(`${el.toFixed(1)}|${st[0]}|${rpm==null?'-':Math.round(rpm)}|${ai==null?'-':Math.round(ai)}|${ao==null?'-':Math.round(ao)}|${g??'-'}|${d?d.map(x=>hx(x)).join(''):'応答なし'}`);
+  }
+ } finally { P.classList.remove('big'); }
+ // つながり時間：指示が出てから AT入力回転が100rpm以下に落ちるまで
+ for(const [s0,label] of steps.filter(x=>/R に|D に/.test(x[1]))){
+  const prevN = rec.filter(r=>r.st<s0 && r.st>=s0-10 && r.ai!=null);
+  const after = rec.filter(r=>r.st===s0 && r.ai!=null);
+  const hit = after.find(r=>r.ai<=100);
+  const sw = after.find(r=>r.g===1);
+  if(!after.length){ extOut(`${label}：データなし`); continue; }
+  extOut(`${label.split('（')[0]}：${hit ? `入力回転0まで ${(hit.el-s0).toFixed(1)}秒（指示から）${sw?`・レバー検知から ${(hit.el-sw.el).toFixed(1)}秒`:''}` : 'AT入力回転が下がらない（つながっていない？）'}${prevN.length?`／直前のN・Pの入力回転 ${Math.round(prevN[prevN.length-1].ai)}rpm`:''}`);
+ }
+ extOut('※目安：N→D・N→R は1秒前後でつながるのが普通。2秒以上かかる・ショックが大きいならCVT内部（クラッチ・油圧）を疑う');
+ extOut('=== CVT点検おわり：「探索結果コピー」で貼ってください ===');
 }
 
 // ===== プライバシー設定 =====
@@ -865,6 +1002,7 @@ function detect(row){
  if(!prev || row.rpm==null || prev.rpm==null || row.time-prev.time>10000) return;
  const t = +row.time;
  hardStopStep(row, prev, t);
+ cvtDetect(row, prev, t);
  const mt = meter.minThr, offPedal = r => r.throttle==null || mt==null || r.throttle <= mt+1.5;
  if(prev.rpm>400 && row.rpm<300) addEvent(t,'stall','エンジン停止（エンスト？）');
  else if(row.speed===0 && prev.speed===0 && row.rpm>=300 && row.rpm<650) addEvent(t,'dip',`アイドリング落ち込み ${Math.round(row.rpm)}rpm`);
@@ -1095,6 +1233,7 @@ function summaryText(){
    L.push(`出発地点:${locText(a)}`); L.push(`いまの地点:${locText(z)}`); }
  }
  L.push(''); for(const x of idleStats()) L.push(x);
+ { const c = cvtStats(); if(c.length){ L.push(''); for(const x of c) L.push(x); } }
  if(events.length){
   L.push(''); L.push('【検出した異変・印】');
   for(const e of events.slice(-12)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}${e.pos&&prv.copyLoc?locText(e.pos):''}`);
@@ -1581,10 +1720,10 @@ async function rawRec(){
 
 // ===== 故障履歴の徹底捜索：読み取り命令の書き方を総当たり =====
 const NRC = {'10':'拒否','11':'その命令は無い','12':'書き方が違う','13':'長さが違う','22':'今は条件が合わない','31':'範囲外','33':'鍵が必要','78':'処理中','7E':'今のモードでは不可','7F':'今のモードでは不可'};
-async function hunt(){
+async function hunt(onlyAT){
  if(!needCAN()) return;
- const targets = ecus.length ? ecus : [{tx:'7E0',rx:'7E8',name:'エンジン'},{tx:'7E1',rx:'7E9',name:'AT（ミッション）'}];
- const cmds = [];
+ const targets = onlyAT ? [{tx:'7E1',rx:'7E9',name:'AT（CVT）'}] : ecus.length ? ecus : [{tx:'7E0',rx:'7E8',name:'エンジン'},{tx:'7E1',rx:'7E9',name:'AT（ミッション）'}];
+ const cmds = ['03','07','0A'];
  for(const st of ['00','01','02','03','04','08','FF']) for(const g of ['FF00','FFFF','0000','8000','C000','4000']) cmds.push('18'+st+g);   // KWP2000 状態別
  cmds.push('17FF00','170000','1700','13','1300','1301','1302');                                                          // KWP 旧来の読み方
  for(const sf of ['01FF','02FF','0208','0204','0A','0F','1308','0F08','1702FF','0B','0C','0D','0E']) cmds.push('19'+sf);   // UDS
@@ -1617,7 +1756,12 @@ async function hunt(){
 }
 
 // ===== ボタン =====
-$('btnHunt').onclick = ()=>withPause(hunt);
+$('btnHunt').onclick = ()=>withPause(()=>hunt(false));
+$('btnCvtDtc').onclick = ()=>withPause(()=>hunt(true));
+$('btnCvtTest').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(cvtTest); };
+function cvtBtn(){ $('btnCvtMode').textContent = '⚙️ CVT診断モード：'+(cvtOn?'ON（走行中も毎回CVTを読む）':'OFF'); if(!cvtOn) $('cvtLive').textContent='CVT：モードOFF'; }
+$('btnCvtMode').onclick = ()=>{ cvtOn=!cvtOn; try{ localStorage.setItem('palette_obd2_cvt', cvtOn?'1':'0'); }catch(e){} cvtBtn(); toast(cvtOn?'CVT診断モードON':'CVT診断モードOFF'); };
+cvtBtn();
 $('btnAuto').onclick = ()=>withPause(fullAuto);
 $('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
 $('btnTrips').onclick = tripsOpen;
