@@ -472,6 +472,7 @@ function demoTransport(){
     else if(c==='0100' && hdr==='7DF') r = '7E8064100BE3EB813\r7E906410098180001';
     else if(c==='0904' && hdr==='7DF') r = '7E81014490401333348\r7E82137304B42313130\r7E8223030000000000';
     else if(c==='1800FF00' && hdr==='7E0') r = fr('580101336A');
+    else if(c==='1800FF00' && hdr==='7E1') r = fr('5800');
     else if(c==='1081') r = fr(hdr==='7E1' ? '5081' : '7F1011');
     else if(c==='1003') r = fr('7F1011');
     else if(c==='1802FFFF' && hdr==='7E1') r = fr('58010700A0');
@@ -1337,6 +1338,16 @@ async function readDtc(){
    if(b && b.length) R.ff.vals.push(`${p.label} ${p.f(b[0],b[1]).toFixed(p.dp)}${p.unit}`);
   }
  }
+ // CVT（7E1）：スズキのCVTはKWP方式の「18 00 FF 00」で故障コードを返す（2026/11/20の窓口探しで確認）
+ R.cvt = null; R.cvtRaw = null;
+ if(isCAN){
+  try{
+   await cmd('ATH1'); await cmd('ATSH7E1'); await cmd('ATCRA7E9');
+   const p = canFrames(await cmd('1800FF00', 6000)).get('7E9');
+   if(p){ R.cvtRaw = toHex(p); if(p[0]===0x58) R.cvt = parseDtcResp(p, 0x58); }
+  }catch(e){}
+  finally{ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); }
+ }
  lastDtc = R;
  const sec = (title, list, none) => `<div><b>${title}</b>：${list==null ? '<span style="color:var(--dim)">非対応</span>' : list.length ? chips(list) : none}</div>`;
  let h = '';
@@ -1344,6 +1355,7 @@ async function readDtc(){
  h += sec('記録済み', R.stored, 'なし');
  h += sec('保留（過去に1回出た等）', R.pending, 'なし');
  h += sec('永久（消去しても残る）', R.permanent, 'なし');
+ h += sec('CVT（ミッション）', R.cvt, 'なし');
  if(R.ff) h += `<div><b>発生時の状態</b>（${R.ff.code}）：${R.ff.vals.join(' / ')||'-'}</div>`;
  if(R.hist.length) h += `<div style="color:var(--dim)">${R.hist.join('<br>')}</div>`;
  h += '<small style="color:var(--dim)">「Claude用コピー」で貼り付けると意味を調べられます</small>';
@@ -1357,6 +1369,7 @@ function dtcText(){
  const L = ['故障コード:'];
  if(R.mil) L.push(`  警告灯: ${R.mil.on?'点灯':'消灯'}（記録${R.mil.count}件）`);
  L.push(`  記録済み(03): ${j(R.stored)}`, `  保留(07): ${j(R.pending)}`, `  永久(0A): ${j(R.permanent)}`);
+ L.push(`  CVT(7E1 1800FF00): ${j(R.cvt)}${R.cvtRaw ? '（生 '+R.cvtRaw+'）' : ''}`);
  if(R.ff) L.push(`  発生時の状態(${R.ff.code}): ${R.ff.vals.join(' / ')}`);
  for(const x of R.hist) L.push('  '+x);
  return L.join('\n');
@@ -1914,7 +1927,7 @@ async function sdtProbe(){
   $('scanProg').textContent = `CVT ${c} を試し中…（${tries.indexOf(c)+1}/${tries.length}）`;
   const p = canFrames(await cmd(c, 4000)).get('7E9');
   if(!p){ none.push(c); continue; }
-  if(p[0]===0x7F){ const k = `${hx(p[1]||0)}番の命令は存在・断り理由 ${hx(p[2]||0)} ${NRC[hx(p[2]||0)]||''}`; (ng[k] ||= []).push(c); continue; }
+  if(p[0]===0x7F){ const k = p[2]===0x11 ? `${hx(p[1]||0)}番の命令はCVTに無い（断り理由11）` : `${hx(p[1]||0)}番の命令は存在・断り理由 ${hx(p[2]||0)} ${NRC[hx(p[2]||0)]||''}`; (ng[k] ||= []).push(c); continue; }
   ok.push(c);
   const codes = parseDtcResp(p, p[0]);
   extOut(`  ✅ ${c} → ${toHex(p)}${codes.length ? '  ⇒ '+codes.join(', ') : ''}`);
@@ -2075,7 +2088,7 @@ $('btnConnect').onclick = ()=>{
 };
 $('btnDemo').onclick = ()=>start('demo');
 $('btnStop').onclick = stop;
-$('btnDtc').onclick = readDtc;
+$('btnDtc').onclick = ()=>withPause(readDtc);
 $('btnCopy').onclick = ()=>copy(summaryText());
 $('btnCsv').onclick = ()=>copy(samples.length ? csvText(downsample(samples, 600)) : null);
 $('btnClearLog').onclick = ()=>{
