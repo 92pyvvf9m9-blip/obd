@@ -36,6 +36,12 @@ pre{white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;bac
 .note{font-size:11px;color:var(--dim);line-height:1.6;margin-top:14px}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);background:var(--ok);color:#06140d;padding:10px 16px;border-radius:99px;font-weight:700;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}
+#tabs{position:sticky;top:0;z-index:20;display:grid;grid-template-columns:repeat(6,1fr);gap:4px;background:var(--bg);padding:6px 0 8px;margin:4px 0 6px;border-bottom:1px solid var(--line)}
+#tabs button{padding:6px 2px;font-size:11px;line-height:1.35;font-weight:600;border-radius:8px}
+#tabs button.on{background:var(--accent);color:#111;border-color:var(--accent)}
+#gchips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
+.gchip{border:1px solid var(--line);border-radius:99px;padding:5px 12px;font-size:13px;color:var(--dim)}
+.gchip.on{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
 h2.sec{font-size:14px;color:var(--accent);margin:22px 0 4px;letter-spacing:.05em}
 .hint{font-size:12px;color:var(--dim);line-height:1.6;margin:4px 0}
 .row{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px;color:var(--dim)}
@@ -56,13 +62,23 @@ select,input{flex:1;min-width:0;background:var(--panel);color:var(--text);border
 #trips{position:fixed;inset:0;background:var(--bg);z-index:55;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 6px) 8px calc(env(safe-area-inset-bottom) + 6px)}
 #trips .dbar select{flex:1;min-width:0;padding:8px;font-size:14px}
 #tWrap{position:relative}
-#tCanvas{width:100%;height:56vh;border-radius:12px;background:#dfe6e9;display:block;touch-action:none}
+#tCanvas{width:100%;height:40vh;border-radius:12px;background:#dfe6e9;display:block;touch-action:none}
 #tZoom{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:6px}
 #tZoom button{width:44px;height:44px;padding:0;font-size:22px;font-weight:700;background:rgba(255,255,255,.92);color:#222;border:1px solid #bbb;border-radius:10px}
 #tZoom button.s{font-size:12px}
 #tInfo{font-size:13px;line-height:1.7;overflow:auto;flex:1;margin-top:6px;color:var(--text)}
 #tInfo a{color:var(--accent)}
-#tInfo .ev{padding:4px 0;border-bottom:1px solid var(--line)}
+#tInfo .ev{padding:6px 4px 6px 8px;border-bottom:1px solid var(--line);border-left:4px solid var(--line);margin-left:6px}
+#tInfo .ev .tm{color:var(--dim);font-variant-numeric:tabular-nums;margin-right:6px}
+#tInfo .ev .no{display:inline-block;min-width:18px;text-align:center;border-radius:9px;color:#111;font-size:11px;padding:0 4px;margin-right:4px}
+#tInfo .ev .pl{color:var(--dim);font-size:12px;margin-left:52px}
+#tInfo .trip{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:10px 0 4px}
+#tInfo .trip .th{font-weight:700;display:flex;justify-content:space-between;gap:6px}
+#tInfo .trip .th span{color:var(--accent);font-weight:600}
+#tInfo .trip .ts{font-size:12px;color:var(--dim);margin-top:2px}
+#tInfo .chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+#tInfo .chip{border:1px solid;border-radius:99px;padding:2px 10px;font-size:12px}
+#tInfo .chip.off{opacity:.35;text-decoration:line-through}
 #tInfo .ev.sel{background:rgba(255,90,90,.15)}
 #dash{position:fixed;inset:0;background:var(--bg);z-index:50;display:flex;flex-direction:column;padding:calc(env(safe-area-inset-top) + 6px) 8px calc(env(safe-area-inset-bottom) + 6px)}
 .dbar{display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:13px;color:var(--dim)}
@@ -93,6 +109,15 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <button id="btnStop" disabled>停止</button>
 </div>
 <div id="meta"></div>
+<nav id="tabs">
+ <button data-tab="live" class="on">📈<br>ライブ</button>
+ <button data-tab="rec">📝<br>記録</button>
+ <button data-tab="diag">🩺<br>診断</button>
+ <button data-tab="cvt">⚙️<br>CVT</button>
+ <button data-tab="lab">🔬<br>探索</button>
+ <button data-tab="map">🗺<br>履歴</button>
+</nav>
+<section class="tab" data-tab="live">
 <div class="btns" style="grid-template-columns:2fr 1fr 1fr">
  <button id="btnDash" class="primary">📊 メーター画面</button>
  <button id="btnTilt">傾きON</button>
@@ -100,6 +125,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 </div>
 <div id="tiltOut" class="hint">傾き：センサー未使用</div>
 
+<div id="gchips"></div>
 <div class="grid" id="grid"></div>
 
 <button id="btnMark" style="width:100%;margin:10px 0 2px">📍 違和感の印（止まってからでOK・直前2分を保存）</button>
@@ -126,9 +152,11 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  ・補正係数：<span id="calShow">1.00</span></p>
 </div>
 
+</section>
+<section class="tab" data-tab="rec" hidden>
+<h2 class="sec">記録と送信</h2>
 <div class="hint" id="drivingNote">🚗 走行中も記録できます。出発前に接続して、iPhoneは<b>画面をつけたまま</b>（設定→画面表示と明るさ→自動ロック「なし」）・<b>充電しながら</b>ホルダーに固定してください。Bluefyを閉じたり画面が消えると記録が止まります。途中で切れても、14時間以内に再接続すれば同じ記録の続きになります（駐車して戻ってきても1日分がつながります。新しく始めたい時は「記録を消す」）。</div>
 <div class="btns">
- <button id="btnDtc" disabled>故障コード</button>
  <button id="btnCopy" class="primary">Claude用コピー</button>
  <button id="btnClearLog">記録を消す</button>
  <button id="btnFast">⚡ 高速読み取り</button>
@@ -136,9 +164,19 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <div class="btns">
  <button id="btnFull">📦 全データをファイルで送る（平均なし・1件残らず）</button>
 </div>
-<div class="hint" style="margin-top:2px">基本は1日の最後に「故障コード」→「📦 全データ」で、出てきた共有画面から<b>Claude</b>を選ぶ（またはファイルに保存してClaudeに添付）。途中で気になった時は「Claude用コピー」で今までの分を送れます。</div>
-<div id="dtcOut"></div>
+<div class="hint" style="margin-top:2px">基本は1日の最後に「🩺診断」タブの「故障コード」→ここの「📦 全データ」で、出てきた共有画面から<b>Claude</b>を選ぶ（またはファイルに保存してClaudeに添付）。途中で気になった時は「Claude用コピー」で今までの分を送れます。</div>
 
+</section>
+<section class="tab" data-tab="diag" hidden>
+<h2 class="sec">故障コード（エンジン＋CVT）</h2>
+<button id="btnDtc" class="primary" style="width:100%;margin:6px 0" disabled>🔎 故障コードを読む</button>
+<div id="dtcOut"></div>
+<h2 class="sec">🩺 プロ診断（診断機の標準機能）</h2>
+<button class="ext primary" id="btnObdAll" style="width:100%;margin:6px 0">📋 OBD全項目チェック（J-OBDⅡ準備状態・気筒ごとの失火回数・自己診断テスト結果・車両情報）</button>
+<button class="ext" id="btnCrank" style="width:100%;margin:6px 0">🔋 始動テスト（バッテリーとセルモーター：押してから15秒以内にエンジンをかける）</button>
+<button class="ext" id="btnClear04" style="width:100%;margin:6px 0">🧹 エンジンの故障コード消去（エンジン停止・キーONで）</button>
+</section>
+<section class="tab" data-tab="cvt" hidden>
 <h2 class="sec">CVT診断（ディーラー診断機ふう）</h2>
 <p class="hint">ミッションのコンピューター（7E1）に直接話しかけて、CVTの中の動きを見ます。読み取り専用です。</p>
 <button class="primary" id="btnCvtMode" style="width:100%;margin:6px 0">⚙️ CVT診断モード：OFF</button>
@@ -154,9 +192,21 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 </div>
 <button class="ext primary" id="btnCvtTest" style="width:100%;margin:6px 0">🧪 CVT点検（停車中・約70秒・P→R→N→Dのつながり時間を測る）</button>
 <button class="ext" id="btnCvtDtc" style="width:100%;margin:6px 0">🔧 CVTの故障コード・履歴を読む（全方式で総当たり）</button>
-<button class="ext primary" id="btnSdt" style="width:100%;margin:6px 0">🧭 SDT方式の窓口探し（CVTの故障コードの読み方を探す・停車中約2〜3分）</button>
 <p class="hint">・<b>CVT診断モードON</b>で走ると、毎回CVTの値も読み、「止まる直前にロックアップが切れない（エンストの原因）」「回転だけ吹け上がる（滑り）」「副変速の切り替わり」を自動で拾って、Claude用コピーに【CVT診断】として入れます。<br>・CVT点検・故障コードの結果は下の「探索結果コピー」で貼ってください。</p>
 
+</section>
+<section class="tab" data-tab="lab" hidden>
+<h2 class="sec">🔬 診断機の命令を探る（読むだけ）</h2>
+<div class="hint" style="margin:0 0 8px;line-height:1.7">本物の診断機メーカーがやるのと同じ順番で奥へ進みます：<b>①扉を探す→②鍵の計算方法を割り出す→③プログラムを吸い出す</b>。消去・書き込み・作動・学習・リセットの命令は、プログラムで送れないようにロックしています（＝ミッションを壊せない）。停車・Pレンジで。</div>
+<button class="ext primary" id="btnVault" style="width:100%;margin:6px 0">🔓 ①奥の扉探し（隠れた診断モード・鍵の有無・メモリ読み出しを調べる／読むだけ・停車中P・約3〜4分）</button>
+<button class="ext primary" id="btnSeed" style="width:100%;margin:6px 0">🔐 ②鍵の研究所（シードを集めて、答えの計算方法を割り出す／読むだけ）</button>
+<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);margin:0 0 6px"><input type="checkbox" id="chkKey" style="width:20px;height:20px"> ⚠ 鍵を1つだけ試す（固定シードの時だけ・1回に1つ）。不安なら<b>OFFのまま</b>でOK</label>
+<button class="ext primary" id="btnDump" style="width:100%;margin:6px 0">📥 ③ECUメモリ吸い出し（プログラムを丸ごと取り出す／読むだけ・最長3分・続きから再開可）</button>
+<button class="ext" id="btnDumpFile" style="width:100%;margin:6px 0">📤 吸い出したデータをファイルで送る</button>
+<div class="hint" style="margin:0 0 8px">③で取り出したプログラムをこちらで解析すると、<b>鍵の計算方法・CVTデータの正体・故障コード表・学習リセットの命令</b>が中から見つかる可能性があります。対象ECUは下の「対象」で切り替え。</div>
+<button class="ext primary" id="btnSniff" style="width:100%;margin:6px 0">🎧 診断機の通信を記録（Gスキャン・SDTが送る命令を覚える／こちらからは何も送らない）</button>
+<div class="hint" style="margin:0 0 6px">OBDの分岐ケーブル（Y字）で、診断機とこのアダプターを同時につなぎ、このボタンを押してから整備士さんに作業してもらう。終わったら「中止」→「探索結果コピー」。</div>
+<button class="ext primary" id="btnSdt" style="width:100%;margin:6px 0">🧭 SDT方式の窓口探し（CVTの故障コードの読み方を探す・停車中約2〜3分）</button>
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
@@ -200,6 +250,9 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <input id="customCmd" placeholder="手動コマンド 例: ATSH7E0;22F190" autocapitalize="characters" autocomplete="off">
  <button class="ext" id="btnSend">送信</button>
 </div>
+</section>
+<section class="tab-out" id="extPanel" hidden>
+<h2 class="sec">結果</h2>
 <div id="scanProg" class="hint"></div>
 <pre id="extOut"></pre>
 <div class="btns">
@@ -208,13 +261,16 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <button id="btnExtClear">表示クリア</button>
 </div>
 
+</section>
+<section class="tab" data-tab="lab" hidden>
 <details><summary>通信ログ（うまく動かない時に）</summary><pre id="log"></pre></details>
 
 <p class="note">
 ・運転中は画面を操作しないでください。走行データは同乗者が操作するか、停車後に確認を。<br>
 ・「Claude用コピー」を押して、Claudeのチャットに貼り付けると、データを読んで解説できます。<br>
-・故障コードの読取のみ行います（消去はしません）。
+・故障コードの消去は「🩺診断」タブのボタンを2回押した時だけ行います。
 </p>
+</section>
 <div class="toast" id="toast"></div>
 <div id="dash" hidden>
  <div class="dbar">
@@ -321,7 +377,22 @@ let supported = new Set(PIDS.map(p=>p.id));
 let samples = [], latest = {}, lastDtc = null, startTime = null;
 
 // ===== 画面 =====
+// ライブ画面の項目をジャンル別に絞り込む
+const GROUPS = {'基本':['rpm','speed','coolant','iat','load','throttle','map','timing','volt'],
+ '燃料・排気':['stft','ltft','o2','o2f','lam','lam2','cmdlam','fsys','fpress','frate','fuel','purge','air','maf','cat','egr'],
+ 'アクセル・スロットル':['throttle','relthr','thrB','accD','accE','thrCmd','isc','aload','load'],
+ '電気':['volt','ecuv'],
+ 'CVT':['atin','atout','gear','tcslip','lockup','pratio','subr','speed','rpm'],
+ 'その他':['runtime','baro','amb','oilt','slope','vib']};
+let gSel = '基本'; try{ gSel = localStorage.getItem('palette_obd2_g') || '基本'; }catch(e){}
+function gApply(){
+ const keys = gSel==='すべて' ? null : new Set(GROUPS[gSel]||[]);
+ for(const p of ALL){ const el = $('t_'+p.key); if(el) el.style.display = (!keys || keys.has(p.key)) ? '' : 'none'; }
+ $('gchips').innerHTML = ['基本','燃料・排気','アクセル・スロットル','電気','CVT','その他','すべて'].map(g=>`<span class="gchip${g===gSel?' on':''}" data-g="${g}">${g}</span>`).join('');
+}
+document.addEventListener('click', e=>{ const c = e.target.closest && e.target.closest('.gchip'); if(c){ gSel = c.dataset.g; try{ localStorage.setItem('palette_obd2_g', gSel); }catch(_){} gApply(); } });
 function buildGrid(){
+ setTimeout(gApply, 0);
  $('grid').innerHTML = ALL.map(p=>`
   <div class="tile" id="t_${p.key}">
    <div class="lbl">${p.label}</div>
@@ -343,7 +414,19 @@ let rxBuf = '', pending = null, chain = Promise.resolve();
 // エコー（送った命令がそのまま先頭に返ってくる）で、どの命令への返事かを照合する。
 // 遅れて届いた前の命令の返事は捨てるので、命令と返事がずれない。
 let echoMode = false;
+let monitor = null;   // 診断機の通信を聞いている間は、届いた行をすべてここに貯める
 function onData(text){
+ if(monitor){
+  monitor.buf += text;
+  let k;
+  while((k = monitor.buf.search(/[\r\n>]/)) >= 0){
+   const l = monitor.buf.slice(0,k).replace(/\s/g,'').toUpperCase(); monitor.buf = monitor.buf.slice(k+1);
+   if(!l) continue;
+   if(/^[0-9A-F]{3}[0-9A-F]{2,16}$/.test(l)) monitor.frames.push({t:Date.now(), id:l.slice(0,3), d:hexBytes(l.slice(3))});
+   else monitor.other.push(l);
+  }
+  return;
+ }
  rxBuf += text;
  let i;
  while((i = rxBuf.indexOf('>')) >= 0){
@@ -448,12 +531,17 @@ async function bleTransport(known){
 
 // ===== デモ（車がなくても動作確認できる擬似ELM327） =====
 function demoTransport(){
- const t0 = Date.now(); let hdr = '7DF', hon = false, echo = true, cra = '';
+ const t0 = Date.now(); let hdr = '7DF', hon = false, echo = true, cra = '', unlocked = false, lastSeed = 0xA1B2C3D4;
  const h =(v,n=1)=>Math.max(0,Math.round(v)).toString(16).toUpperCase().padStart(n*2,'0').slice(-n*2);
  return {
   name:'デモ',
   async write(s){
+   if(this.mon){ clearInterval(this.mon); this.mon=null; setTimeout(()=>onData('STOPPED\r\r>'), 20); return; }
    const c = s.trim().toUpperCase(); const t=(Date.now()-t0)/1000;
+   if(c==='ATMA'){   // 診断機の通信のまね（モード切替→鍵→学習リセット→読み取り）
+    const seq = ['7E10210920000000000','7E9025092000000000','7E1022701000000000','7E906670112345600','7E1052702A1B2C3D4','7E9026702000000000','7E104311201000000','7E9037112010000000','7E10221040000000000','7E9107A61040E4C0C24','7E1300000000000000','7E92105940037716B13','7E922FFFF8193FFFFFF'];
+    let i=0; this.mon = setInterval(()=>{ onData(seq[i++ % seq.length]+'\r'); }, 60); return;
+   }
    const ec = echo ? c+'\r' : '';
    if(c==='ATE0') echo=false; if(c==='ATE1'||c==='ATZ'||c==='ATWS') echo=true;
    const rpm = 800 + 1400*(1+Math.sin(t/4)) + Math.random()*80;
@@ -477,6 +565,22 @@ function demoTransport(){
     else if(c==='1800FF00' && hdr==='7E1') r = fr('5800');
     else if(c==='1081') r = fr(hdr==='7E1' ? '5081' : '7F1011');
     else if(c==='1003') r = fr('7F1011');
+    else if((c==='1081'||c==='10C0'||c==='1092') && hdr==='7E1') r = fr('50'+c.slice(2));
+    else if(/^10[0-9A-F]{2}$/.test(c)) r = fr('7F1012');
+    else if(c==='2701' && hdr==='7E1') r = fr('6701'+h(lastSeed>>>24)+h(lastSeed>>>16&255)+h(lastSeed>>>8&255)+h(lastSeed&255));
+    else if(/^2702[0-9A-F]{8}$/.test(c) && hdr==='7E1'){ const key=parseInt(c.slice(4),16)>>>0, want=(lastSeed+0x11170)>>>0; if(key===want){ unlocked=true; r=fr('6702'); } else r=fr('7F2735'); }
+    else if(/^27[0-9A-F]{2}$/.test(c) && hdr==='7E1') r = fr(parseInt(c.slice(2,4),16)&1 ? '67'+c.slice(2,4)+'1A2B3C4D' : '7F2724');
+    else if(c.startsWith('27')) r = fr('7F2712');
+    else if(/^23/.test(c) && hdr==='7E1'){
+     if(!unlocked) r = fr('7F2333');
+     else { const m=c.match(/^23(14|24)?([0-9A-F]+)$/); let addr=0,n=8; const body=c.slice(2);
+      if(c.startsWith('2314')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,14),16); }
+      else if(c.startsWith('2324')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,16),16); }
+      else if(body.length>=8){ addr=parseInt(body.slice(0,6),16); n=parseInt(body.slice(6,8),16); }
+      if(addr>0x30000){ r=fr('7F2331'); } else { let d='63'; for(let i=0;i<Math.min(n,64);i++) d+=h((addr+i*7+0x4B)&255); r=fr(d); } }
+    }
+    else if(c.startsWith('23')) r = fr('7F2311');
+    else if(c==='20') r = fr('60');
     else if(c==='1802FFFF' && hdr==='7E1') r = fr('58010700A0');
     else if(c.startsWith('18')||c==='1902FF'||c==='13') r = fr('7F'+c.slice(0,2)+'12');
     else if(hdr==='7E0' && c==='22F190') r = '7E81014'+'62F190'+'4D4B\r7E82132315331323334\r7E82235363700000000';
@@ -527,6 +631,19 @@ function demoTransport(){
    else if(c==='014E') r = '414E0F00';
    else if(c==='0130') r = '41301E';
    else if(c==='020200') r = '4202000133';
+   else if(c==='0141') r = '41410007E104';
+   else if(c==='0600') r = '460000000001';
+   else if(c==='0620') r = '462080000001';
+   else if(c==='0640') r = '464000000001';
+   else if(c==='0660') r = '466000000001';
+   else if(c==='0680') r = '468080000001';
+   else if(c==='06A0') r = '46A0F0000000';
+   else if(c==='0621') r = '4621'+'80'+'01'+'0123'+'0000'+'0400';
+   else if(c==='0681') r = '4681'+'84'+'03'+'0014'+'FE0C'+'01F4';
+   else if(/^06A[1-4]$/.test(c)){ const n = c==='06A4' ? 37 : c==='06A1' ? 45 : 3; r = '46'+c.slice(2)+'0B24'+h(n,2)+'0000FFFF'+c.slice(2)+'0C24'+h(n>>1,2)+'0000FFFF'; }
+   else if(c==='0900') r = '490050400000';
+   else if(c==='0904') r = '490401'+[...'33920-82K10'].map(x=>h(x.charCodeAt(0))).join('')+'0000';
+   else if(c==='090A') r = '490A01'+[...'ECM-EngineControl'].map(x=>h(x.charCodeAt(0))).join('');
    else if(c==='020C00') r = '420C00'+h(2400*4,2);
    else if(c==='020D00') r = '420D00'+h(52);
    else if(c==='020500') r = '42050'+'0'+h(86+40);
@@ -1100,12 +1217,54 @@ function tripsRender(){
  $('tSel').value=String(tv.trip);
  const pts = tv.trip<0 ? d.pts : (trips[tv.trip]||[]);
  const t0=pts.length?pts[0][0]:0, t1=pts.length?pts[pts.length-1][0]:0;
- const evs = d.ev.filter(e=> tv.trip<0 || (e.t>=t0-60000 && e.t<=t1+60000));
+ const evAll = d.ev.filter(e=> tv.trip<0 || (e.t>=t0-60000 && e.t<=t1+60000));
+ const evs = evAll.filter(e=> !tv.hide || !tv.hide.has(evCat(e.text)[2]));
  if(tv.lastKey!==tv.day+'/'+tv.trip){ tv.cam=null; tv.lastKey=tv.day+'/'+tv.trip; }
  tripsDraw(pts, evs);
- $('tInfo').innerHTML = !pts.length ? '<div class="hint">この日の位置の記録はありません。接続した時に位置情報を「許可」にすると記録されます。</div>' :
-  (evs.length ? evs.map((e,k)=>`<div class="ev${k===tv.sel?' sel':''}" data-k="${k}"><b style="color:#e74c3c">${k+1}</b>　${hm(e.t)}　${e.text}　<a href="${mapUrl(e)}" target="_blank">地図で開く</a></div>`).join('') : '<div class="hint">この区間に異変・印はありません。</div>');
+ $('tInfo').innerHTML = !pts.length ? '<div class="hint">この日の位置の記録はありません。接続した時に位置情報を「許可」にすると記録されます。</div>' : timelineHtml(tv.trip<0 ? trips : [trips[tv.trip]], evAll, evs, tv.trip<0);
  tv.evs=evs;
+}
+// ===== タイムライン：走行ごとにまとめ、異変を種類別の色とアイコンで並べる =====
+const EVCAT = [
+ [/ロックアップ|CVT|後段|副変速|滑り|吹け上が|クラッチ|AT入力/, '⚙️','CVT','#4da3ff'],
+ [/燃調/, '⛽','燃料','#ff8c42'],
+ [/揺れ/, '〰️','揺れ','#b07cff'],
+ [/急減速|ブレーキ/, '🛑','急停止','#ff5a5a'],
+ [/Bluetooth|再接続/, '📶','接続','#8894a0'],
+ [/手動の印/, '📍','印','#3ddc97'],
+ [/回転|エンスト|アイドル|点火|ノック|失火/, '🔧','エンジン','#ffb020'],
+];
+function evCat(text){ for(const c of EVCAT) if(c[0].test(text)) return c; return [null,'⚠️','その他','#e8edf2']; }
+function tripNums(p){
+ const t0 = p[0][0], t1 = p[p.length-1][0];
+ const sp = p.map(x=>x[3]).filter(x=>x!=null);
+ const rows = samples.filter(r=>+r.time>=t0-30000 && +r.time<=t1+30000);
+ const mx = k => { let m=null; for(const r of rows) if(r[k]!=null && (m==null || r[k]>m)) m=r[k]; return m; };
+ const idle = rows.filter(r=>r.speed===0 && r.rpm>300 && (r.coolant||0)>=80).map(r=>r.rpm);
+ return {t0, t1, min:Math.round((t1-t0)/60000), km:tripKm(p), vmax: sp.length?Math.max(...sp):mx('speed'),
+  rpm:mx('rpm'), map:mx('map'), cool:mx('coolant'), idle: idle.length ? Math.round(idle.reduce((a,b)=>a+b,0)/idle.length) : null, n:rows.length};
+}
+function timelineHtml(trips, evAll, evs, all){
+ // 種類ごとの件数（タップで表示/非表示）
+ const cnt = {}; for(const e of evAll){ const c = evCat(e.text); cnt[c[2]] = (cnt[c[2]]||0)+1; }
+ tv.hide ||= new Set();
+ let h = '<div class="chips">' + Object.entries(cnt).map(([k,n])=>{ const c = EVCAT.find(x=>x[2]===k) || [0,'⚠️',k,'#e8edf2']; return `<span class="chip${tv.hide.has(k)?' off':''}" data-cat="${k}" style="border-color:${c[3]}">${c[1]} ${k} ${n}</span>`; }).join('') + '</div>';
+ if(!evAll.length) h += '<div class="hint">この区間に異変・印はありません。</div>';
+ const used = new Set();
+ const evRow = (e)=>{ const k = evs.indexOf(e); used.add(e); const c = evCat(e.text), pl = placeOf(e);
+  return `<div class="ev${k===tv.sel?' sel':''}" data-k="${k}" style="border-left-color:${c[3]}"><span class="tm">${hm(e.t)}</span><b class="no" style="background:${c[3]}">${k+1}</b> ${c[1]} ${e.text}${pl?`<div class="pl">📍${pl}　<a href="${mapUrl(e)}" target="_blank">地図</a></div>`:`　<a href="${mapUrl(e)}" target="_blank">地図</a>`}</div>`; };
+ trips.forEach((p, idx)=>{
+  if(!p || !p.length) return;
+  const s = tripNums(p), k = all ? idx : tv.trip;
+  const mine = evs.filter(e=>e.t>=s.t0-60000 && e.t<=s.t1+60000 && !used.has(e));
+  h += `<div class="trip" data-trip="${k}"><div class="th">🚗 ${k+1}回目　${hm(s.t0)} → ${hm(s.t1)}<span>${s.min}分・${s.km.toFixed(1)}km</span></div>`
+     + `<div class="ts">最高 ${s.vmax??'-'}km/h ・ ${s.rpm!=null?Math.round(s.rpm):'-'}rpm ・ 吸気圧 ${s.map??'-'}kPa ・ 水温 ${s.cool??'-'}℃ ・ 停車中の回転 ${s.idle??'-'}rpm ・ 異変 ${mine.length}件</div>`
+     + (all ? '<div class="hint" style="margin:0">タップでこの走行だけ表示</div>' : '') + '</div>';
+  h += mine.map(evRow).join('');
+ });
+ const rest = evs.filter(e=>!used.has(e));
+ if(rest.length) h += '<div class="trip"><div class="th">🅿️ 走行の外（停車中など）</div></div>' + rest.map(evRow).join('');
+ return h;
 }
 function x2lon(x,z){ return x/(256*2**z)*360-180; }
 function y2lat(y,z){ return Math.atan(Math.sinh(Math.PI*(1-2*y/(256*2**z))))*180/Math.PI; }
@@ -1143,7 +1302,7 @@ function tripsDraw(pts, evs){
  }
  const dot=(x,y,r,c)=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(x,y,r+2,0,7); g.fill(); g.fillStyle=c; g.beginPath(); g.arc(x,y,r,0,7); g.fill(); };
  if(pts.length){ dot(X(pts[0][2]),Y(pts[0][1]),7,'#27ae60'); const l=pts[pts.length-1]; dot(X(l[2]),Y(l[1]),7,'#222'); }
- evs.forEach((e,k)=>{ const x=X(e.lon), y=Y(e.lat); dot(x,y,k===tv.sel?13:10,'#e74c3c'); g.fillStyle='#fff'; g.font='bold 12px sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(String(k+1),x,y+0.5); });
+ evs.forEach((e,k)=>{ const x=X(e.lon), y=Y(e.lat); dot(x,y,k===tv.sel?13:10,evCat(e.text)[3]==='#e8edf2'?'#e74c3c':evCat(e.text)[3]); g.fillStyle='#fff'; g.font='bold 12px sans-serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(String(k+1),x,y+0.5); });
  g.textAlign='left'; g.textBaseline='alphabetic'; g.fillStyle='rgba(255,255,255,.8)';
  g.font='10px sans-serif'; { const tw=g.measureText('© OpenStreetMap contributors').width+8; g.fillRect(W-tw,H-16,tw,16); g.fillStyle='#333'; g.fillText('© OpenStreetMap contributors',W-tw+4,H-4); }
 }
@@ -1474,7 +1633,13 @@ function summaryText(){
   L.push(''); L.push('【検出した異変・印】');
   const evA = events.filter(e=>!e.text.startsWith('iPhoneの角度'));
   if(evA.length>40) L.push(`（全${evA.length}件のうち最新40件）`);
-  for(const e of evA.slice(-40)) L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${e.text}${e.pos&&prv.copyLoc?locText(e.pos):''}`);
+  { const segs = splitDrives(); let last = -2;
+    for(const e of evA.slice(-40)){
+     const si = segs.findIndex(g=>e.t>=+g[0].time-60000 && e.t<=+g[g.length-1].time+60000);
+     if(si!==last){ last = si; L.push(si>=0 ? `― 区間${si+1}（${segs[si][0].time.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}〜${segs[si][segs[si].length-1].time.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}）―` : '― 走行の外 ―'); }
+     const c = evCat(e.text);
+     L.push(`${new Date(e.t).toLocaleTimeString('ja-JP')} ${c[1]}[${c[2]}] ${e.text}${e.pos&&prv.copyLoc?locText(e.pos):''}`);
+    } }
   const evR = events.filter(e=>!/^iPhoneの角度|^Bluetooth|^再接続/.test(e.text));
   for(const e of evR.slice(-6)){
    const back = e.text.startsWith('手動の印') ? 120000 : 25000;
@@ -2057,6 +2222,398 @@ async function rawRec(){
 // ===== SDT方式の窓口探し：CVTコンピューターが「どの命令なら返事をするか」を全部調べる =====
 // 読み取り専用の命令だけ（消去04/14・書込2E/3B・作動2F/30/31・リセット11・鍵27・書換34/36・プログラミング1085 は絶対に送らない）
 const SDT_FORBID = /^(04|14|2E|2F|30|31|3B|11|27|34|35|36|37|1085|1002|1086|1087)/;
+// ===== 診断機（Gスキャン・SDTなど）がCVT/エンジンに送る命令を、横で聞いて記録する =====
+// ELM327の「聞くだけ」モード（ATMA）。こちらからは一切送信しない（ACKも返さない）。
+const SVC = {'10':'診断モード切替','11':'ECUリセット','14':'故障コード消去','18':'故障コード読取','1A':'ECU情報','21':'データ読取','22':'データ読取','23':'メモリ読取','27':'セキュリティ（鍵）','2E':'書き込み(ID)','2F':'作動テスト','30':'作動テスト','31':'ルーチン実行（学習・リセット等）','32':'ルーチン停止','33':'ルーチン結果','3B':'書き込み(ローカルID)','3E':'つなぎっぱなし合図','34':'プログラム書込み開始','36':'プログラム転送','37':'プログラム転送終了','04':'OBD故障コード消去','03':'OBD故障コード','01':'OBDデータ','09':'OBD車両情報'};
+const sleepMs = ms => new Promise(r=>setTimeout(r, ms));
+function isoMessages(frames){
+ // CANの生フレームを、ISO-TP（複数フレーム）を組み立てた「1つの命令/返事」にまとめる
+ const asm = {}, out = [];
+ for(const f of frames){
+  const b = f.d, pci = b[0]>>4;
+  if(pci===0){ out.push({t:f.t, id:f.id, p:b.slice(1, 1+(b[0]&15))}); }
+  else if(pci===1){ asm[f.id] = {t:f.t, id:f.id, len:((b[0]&15)<<8)|b[1], p:b.slice(2)}; }
+  else if(pci===2 && asm[f.id]){ const a = asm[f.id]; a.p.push(...b.slice(1)); if(a.p.length>=a.len){ a.p = a.p.slice(0,a.len); out.push(a); delete asm[f.id]; } }
+ }
+ return out;
+}
+async function sniff(){
+ if(!needCAN()) return;
+ extOut('=== 診断機の通信を記録（聞くだけ・こちらからは送信しません） ===');
+ for(const c of ['ATH1','ATS0','ATCAF0','ATAL','ATCSM1','ATCF7E0','ATCM7F0']) await cmd(c);   // 7E0〜7EF（診断の送受信）だけを聞く
+ monitor = {frames:[], other:[], buf:''};
+ const t0 = Date.now();
+ try{ await transport.write('ATMA\r'); }catch(e){ monitor = null; extOut('開始できませんでした'); return; }
+ while(!abortExt && monitor.frames.length < 30000){
+  await sleepMs(500);
+  $('scanProg').textContent = `🎧 記録中… ${monitor.frames.length}フレーム／${Math.round((Date.now()-t0)/1000)}秒（終わったら「中止」）`;
+ }
+ const m = monitor; monitor = null;
+ try{ await transport.write('\r'); }catch(e){}
+ await sleepMs(800); rxBuf = '';
+ if(m.other.some(l=>/BUFFERFULL/.test(l))) extOut('※アダプターの処理が追いつかず、一部が抜けた可能性あり（BUFFER FULL）');
+ const msgs = isoMessages(m.frames);
+ try{ IDB.put('palette_obd2_sniff_'+t0, {t0, frames:m.frames}); }catch(e){}
+ extOut(`記録 ${m.frames.length}フレーム → 命令/返事 ${msgs.length}件（${Math.round((Date.now()-t0)/1000)}秒）`);
+ // 同じ読み取りの繰り返しはまとめる。書き込み・学習・鍵などは全部そのまま出す
+ const seen = {}, keep = [];
+ for(const x of msgs){
+  const sv = hx(x.p[0]||0), isReq = parseInt(x.id,16) < 0x7E8;
+  const reqSv = isReq ? sv : hx(((x.p[0]||0)-0x40)&255);
+  const important = !['21','22','1A','3E','01','18','03','09'].includes(isReq ? sv : (sv==='7F' ? hx(x.p[1]||0) : reqSv));
+  const key = x.id+':'+toHex(x.p.slice(0, isReq?3:2));
+  if(!important){ seen[key] = (seen[key]||0)+1; if(seen[key] > 2) continue; }
+  keep.push(x);
+ }
+ const ts = t=>{ const d=new Date(t); return d.toLocaleTimeString('ja-JP')+'.'+String(d.getMilliseconds()).padStart(3,'0'); };
+ extOut('--- 時系列（同じ読み取りの3回目以降は省略） ---');
+ for(const x of keep.slice(0, 1500)){
+  const isReq = parseInt(x.id,16) < 0x7E8, sv = hx(x.p[0]||0);
+  const name = isReq ? (SVC[sv]||'') : sv==='7F' ? `断り（${SVC[hx(x.p[1]||0)]||hx(x.p[1]||0)}・理由${hx(x.p[2]||0)}）` : '返事';
+  extOut(`${ts(x.t)} ${x.id} ${isReq?'→':'←'} ${toHex(x.p.slice(0,64))}${x.p.length>64?' …('+x.p.length+'バイト)':''}  ${name}`);
+ }
+ const cnt = Object.entries(seen).filter(([k,v])=>v>2).map(([k,v])=>`${k} ×${v}`);
+ if(cnt.length){ extOut('--- 繰り返しの読み取り（回数） ---'); for(const c of cnt.slice(0,80)) extOut('  '+c); }
+ extOut('=== 記録おわり：「探索結果コピー」で貼ってください（この命令の並びから、同じ作業をするボタンを組み立てます） ===');
+}
+
+// ===== プロ診断：OBD全項目（モード01準備状態・モード06テスト結果・モード09車両情報） =====
+const MON_SPARK = ['触媒','触媒ヒーター','エバポ（燃料蒸発ガス）','二次空気','エアコン冷媒','O2センサー','O2センサーヒーター','EGR/VVT'];
+const MID_NAME = m=>{
+ const n = parseInt(m,16);
+ if(n>=0x01 && n<=0x10){ const k=n-1; return `O2センサー バンク${(k>>2)+1}-${(k&3)+1}`; }
+ if(n>=0x41 && n<=0x50){ const k=n-0x41; return `O2センサーヒーター バンク${(k>>2)+1}-${(k&3)+1}`; }
+ if(n>=0xA2 && n<=0xAD) return `失火 ${n-0xA1}番気筒`;
+ return ({'21':'触媒 バンク1','22':'触媒 バンク2','31':'EGR/VVT','32':'EGR/VVT 2','33':'EGR/VVT 3','35':'VVT バンク1','36':'VVT バンク2','39':'エバポ 0.150"','3A':'エバポ 0.090"','3B':'エバポ 0.040"','3C':'エバポ 0.020"','3D':'パージ流量','61':'触媒ヒーター1','71':'二次空気1','81':'燃料系 バンク1','82':'燃料系 バンク2','85':'過給圧 バンク1','A1':'失火 全体'})[m] || 'テスト'+m;
+};
+const TID_NAME = {'0B':'過去10回の平均失火数','0C':'今回(直近)の失火数','01':'リッチ→リーン切替電圧','02':'リーン→リッチ切替電圧','05':'リッチ→リーン切替時間','06':'リーン→リッチ切替時間'};
+function uas(u, raw){
+ const sgn = u>=0x80, v = sgn ? (raw>=0x8000 ? raw-0x10000 : raw) : raw, b = u & 0x7F;
+ const T = {0x01:[1,''],0x02:[0.1,''],0x03:[0.01,''],0x04:[0.001,''],0x05:[0.0000305,''],0x06:[0.000305,''],0x07:[0.25,'rpm'],0x08:[0.01,'km/h'],0x09:[1,'km/h'],0x0A:[0.122,'mV'],0x0B:[0.001,'V'],0x0C:[0.01,'V'],0x0D:[0.00390625,'mA'],0x0E:[0.001,'A'],0x0F:[0.01,'A'],0x10:[1,'ms'],0x11:[100,'ms'],0x12:[1,'s'],0x13:[1,'mΩ'],0x14:[1,'Ω'],0x15:[1,'kΩ'],0x17:[0.01,'kPa'],0x18:[0.0117,'kPa'],0x19:[0.079,'kPa'],0x1A:[1,'kPa'],0x1B:[10,'kPa'],0x1C:[0.01,'°'],0x1D:[0.5,'°'],0x1E:[0.0000305,''],0x1F:[0.05,'A/F'],0x20:[0.0039062,''],0x22:[1,'Hz'],0x24:[1,'回'],0x25:[1,'km'],0x26:[0.1,'mV/ms'],0x27:[0.01,'g/s'],0x28:[1,'g/s'],0x29:[0.25,'Pa/s'],0x2F:[0.01,'%'],0x30:[0.001526,'%'],0x34:[1,'分'],0x35:[10,'ms'],0x3C:[0.1,'µs'],0x3D:[0.01,'mA']};
+ if(b===0x16) return {v:v*0.1-40, u:'℃'};
+ const t = T[b]; return t ? {v:v*t[0], u:t[1]} : {v, u:'(生)'};
+}
+function supMask(b, base){ const out=[]; const m = ((b[0]<<24)>>>0)+(b[1]<<16)+(b[2]<<8)+b[3]; for(let n=1;n<=32;n++) if(m & (1<<(32-n))>>>0) out.push(hx(base+n)); return out; }
+function rawBytes(r, pre){ const s = lines(r).filter(l=>!/NODATA|ERROR|\?/.test(l)).join(''); const i = s.indexOf(pre); return i<0 ? null : hexBytes(s.slice(i+pre.length)); }
+async function obdAll(){
+ extOut('=== OBD全項目チェック（読むだけ） ===');
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ // ① 準備状態（J-OBDⅡ レディネス）
+ const a = parsePid(await cmd('0101'), '01');
+ if(a && a.length>=4){
+  extOut(`■ J-OBDⅡ 準備状態：警告灯 ${a[0]&0x80?'点灯':'消灯'}・記録コード ${a[0]&0x7F}件`);
+  const cont = [['失火',0],['燃料系',1],['部品',2]].map(([n,i])=> (a[1]>>i)&1 ? `${n} ${((a[1]>>(i+4))&1)?'❌未完了':'✅完了'}` : null).filter(Boolean);
+  extOut('  常時監視：' + cont.join(' ／ '));
+  const nc = MON_SPARK.map((n,i)=> (a[2]>>i)&1 ? `${n} ${((a[3]>>i)&1)?'❌未完了':'✅完了'}` : null).filter(Boolean);
+  extOut('  走行中テスト：' + (nc.join(' ／ ')||'なし'));
+ }
+ const a41 = parsePid(await cmd('0141'), '41');
+ if(a41 && a41.length>=4){
+  const nc = MON_SPARK.map((n,i)=> (a41[2]>>i)&1 ? `${n} ${((a41[3]>>i)&1)?'未完了':'完了'}` : null).filter(Boolean);
+  extOut('  今回の運転中：' + (nc.join(' ／ ')||'-'));
+ }
+ // ② モード06：自己診断テストの結果（失火回数・O2・触媒など）
+ extOut('■ 自己診断テストの結果（モード06）');
+ let mids = [];
+ for(const base of [0x00,0x20,0x40,0x60,0x80,0xA0,0xC0,0xE0]){
+  if(abortExt) break;
+  if(base && !mids.includes(hx(base))) break;
+  const b = rawBytes(await cmd('06'+hx(base), 4000), '46'+hx(base));
+  if(!b || b.length<4){ if(!base) extOut('  モード06には対応していません'); break; }
+  mids.push(...supMask(b, base));
+ }
+ const realMids = mids.filter(m=>parseInt(m,16)%0x20!==0);
+ if(realMids.length) extOut('  対応テスト：' + realMids.map(m=>MID_NAME(m)).join('、'));
+ const mis = {};
+ for(const m of realMids){
+  if(abortExt) break;
+  $('scanProg').textContent = `テスト結果 ${MID_NAME(m)} を読み中…`;
+  const b = rawBytes(await cmd('06'+m, 4000), '46'+m);
+  if(!b){ extOut(`  ${MID_NAME(m)}：返事なし`); continue; }
+  // 9バイトずつ：TID・単位・値・下限・上限（途中に同じMIDが挟まる場合も考慮）
+  let k = 0;
+  while(k+8 <= b.length){
+   if(k>0){ if(hx(b[k])!==m) break; k++; if(k+8 > b.length) break; }   // 2件目からは先頭に同じテスト番号が付く
+   const tid = hx(b[k]), u = b[k+1], v = (b[k+2]<<8)|b[k+3], lo = (b[k+4]<<8)|b[k+5], hi = (b[k+6]<<8)|b[k+7];
+   const V = uas(u,v), L = uas(u,lo), H = uas(u,hi);
+   const ok = V.v >= L.v && V.v <= H.v;
+   const dp = Math.abs(V.v) < 10 && V.u!=='回' ? 3 : 0;
+   extOut(`  ${ok?'✅':'❌'} ${MID_NAME(m)}｜${TID_NAME[tid]||'項目'+tid}：${V.v.toFixed(dp)}${V.u}（合格範囲 ${L.v.toFixed(dp)}〜${H.v.toFixed(dp)}）`);
+   if(parseInt(m,16)>=0xA2 && parseInt(m,16)<=0xAD) (mis[m] ||= {})[tid] = V.v;
+   k += 8;
+  }
+ }
+ const cyl = Object.keys(mis).sort();
+ if(cyl.length){
+  extOut('  ▶ 気筒ごとの失火（多い順）：' + cyl.map(m=>({m, n:(mis[m]['0C']??0)+(mis[m]['0B']??0)})).sort((x,y)=>y.n-x.n).map(x=>`${MID_NAME(x.m)} ${x.n.toFixed(0)}`).join(' ／ '));
+ }
+ // ③ モード09：車両情報
+ extOut('■ 車両情報（モード09）');
+ const b9 = rawBytes(await cmd('0900', 4000), '4900');
+ const s9 = b9 && b9.length>=4 ? supMask(b9, 0) : [];
+ extOut('  対応：' + (s9.join(' ')||'なし'));
+ const ascii = b => b.filter(x=>x>=0x20 && x<0x7F).map(x=>String.fromCharCode(x)).join('');
+ for(const [id,n] of [['02','車台番号(VIN)'],['04','キャリブレーションID（制御プログラム番号）'],['06','CVN（プログラムの検査値）'],['08','走行中テストの実施回数'],['0A','コンピューター名']]){
+  if(abortExt || (s9.length && !s9.includes(id))) continue;
+  const b = rawBytes(await cmd('09'+id, 4000), '49'+id);
+  if(!b){ continue; }
+  const body = b.slice(1);
+  extOut(`  ${n}：${id==='06'||id==='08' ? toHex(body) : ascii(body)||toHex(body)}`);
+ }
+ extOut('=== チェックおわり：「探索結果コピー」で貼ってください ===');
+}
+// ===== 始動テスト：セルを回している間の電圧を最速で測る =====
+async function crankTest(){
+ extOut('=== 始動テスト：今からエンジンをかけてください（15秒間 測ります） ===');
+ const pts = []; const t0 = Date.now();
+ while(Date.now()-t0 < 15000 && !abortExt){
+  const m = (await cmd('ATRV', 800)).match(/(\d+(\.\d+)?)\s*V/i);
+  if(m) pts.push({t:Date.now()-t0, v:parseFloat(m[1])});
+  $('scanProg').textContent = `測定中… ${((Date.now()-t0)/1000).toFixed(0)}秒 ${m?m[1]+'V':''}`;
+ }
+ if(pts.length<5){ extOut('電圧が読めませんでした'); return; }
+ const before = pts.slice(0,3).reduce((a,p)=>a+p.v,0)/3;
+ const min = pts.reduce((a,p)=>p.v<a.v?p:a);
+ const low = pts.filter(p=>p.v < before-1);
+ const after = pts.slice(-5).reduce((a,p)=>a+p.v,0)/5;
+ const crankMs = low.length ? low[low.length-1].t - low[0].t : 0;
+ extOut(`  かける前 ${before.toFixed(2)}V → セル中の最低 ${min.v.toFixed(2)}V（${(min.t/1000).toFixed(1)}秒）→ かかった後 ${after.toFixed(2)}V`);
+ extOut(`  セルが回っていた時間（推定）：${(crankMs/1000).toFixed(1)}秒 ／ 測定 ${pts.length}回（約${(15000/pts.length).toFixed(0)}msごと）`);
+ const j = min.v >= 9.6 ? '✅ 良好（9.6V以上）' : min.v >= 9.0 ? '⚠ やや弱い（9.0〜9.6V）：バッテリーの劣化が始まっている可能性' : '❌ 弱い（9.0V未満）：バッテリーかセルモーター・配線の点検を';
+ extOut('  判定：' + (low.length ? j : '電圧の落ち込みが見つかりません（測定中にエンジンをかけましたか？）'));
+ extOut('  充電：' + (after >= 13.5 && after <= 14.8 ? `✅ ${after.toFixed(2)}V（正常範囲13.5〜14.8V）` : `⚠ ${after.toFixed(2)}V`));
+ extOut('  電圧の動き：' + pts.filter((_,i)=>i%Math.max(1,Math.ceil(pts.length/60))===0).map(p=>p.v.toFixed(1)).join(' '));
+}
+// ===== エンジンの故障コード消去（モード04：法律で決まった標準の命令） =====
+let clear04Armed = 0;
+async function clear04(){
+ if(latest.rpm && latest.rpm > 0){ extOut('エンジンがかかっています。止めてキーONの状態でやり直してください'); return; }
+ extOut('=== エンジンの故障コード消去 ===');
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ const r = await cmd('04', 6000);
+ const ok = lines(r).some(l=>l.startsWith('44'));
+ extOut(ok ? '✅ 消去しました。準備状態（J-OBDⅡ）も未完了に戻ります。エンジンをかけて15分ほどアイドリングしてから走り出してください' : '消去できませんでした：'+r.replace(/[\r\n]+/g,' ').trim());
+}
+// ===== 🔐 鍵の研究所：シード（鍵の問題）を集めて、答え（キー）の計算方法を割り出す =====
+// シードを何度ももらう＝読むだけ＝安全。キー（答え）を送るのは、下のスイッチをONにした時だけ（1回に1つ・上限あり）。
+// 本物の診断機メーカーがやっているのと同じ「総当たり＋既知アルゴリズム照合」を、iPhoneの中でやる。
+function u32(b, i=0){ return ((b[i]<<24)|(b[i+1]<<16)|(b[i+2]<<8)|b[i+3])>>>0; }
+function b4(n){ n>>>=0; return [n>>>24&255, n>>>16&255, n>>>8&255, n&255]; }
+function rol(n,k){ n>>>=0; k&=31; return ((n<<k)|(n>>>(32-k)))>>>0; }
+function ror(n,k){ n>>>=0; k&=31; return ((n>>>k)|(n<<(32-k)))>>>0; }
+// 既知の計算方法の図書館（KWP2000/UDSで実際に多い型。seed=32bit → key=32bit）
+const KEYALGOS = [
+ {n:'キー＝シード＋定数0x11170（VAG系で有名）', f:s=>(s+0x11170)>>>0},
+ {n:'キー＝シード＋定数0x1F', f:s=>(s+0x1F)>>>0},
+ {n:'キー＝シード＋定数0x5A5A', f:s=>(s+0x5A5A)>>>0},
+ {n:'キー＝シードの反転（NOT）', f:s=>(~s)>>>0},
+ {n:'キー＝シード XOR 0xFFFFFFFF', f:s=>(s^0xFFFFFFFF)>>>0},
+ {n:'キー＝シード XOR 0x5A5A5A5A', f:s=>(s^0x5A5A5A5A)>>>0},
+ {n:'キー＝シード XOR 0x12345678', f:s=>(s^0x12345678)>>>0},
+ {n:'キー＝シードを左へ1ビット回転', f:s=>rol(s,1)},
+ {n:'キー＝シードを左へ8ビット回転（バイト入替）', f:s=>rol(s,8)},
+ {n:'キー＝シードを右へ1ビット回転', f:s=>ror(s,1)},
+ {n:'キー＝シードのバイトを逆順', f:s=>{const b=b4(s); return u32([b[3],b[2],b[1],b[0]]);}},
+ {n:'キー＝シード×定数0x1989+0x3F（Denso系でよくある型）', f:s=>((Math.imul(s,0x1989)>>>0)+0x3F)>>>0},
+ {n:'キー＝(シード<<3) XOR (シード>>5)', f:s=>((s<<3)^(s>>>5))>>>0},
+ {n:'キー＝シードの各バイト＋0x11（スズキ系で試す価値）', f:s=>{const b=b4(s); return u32(b.map(x=>(x+0x11)&255));}},
+ {n:'キー＝シード＋(シードを左16回転)', f:s=>(s+rol(s,16))>>>0},
+];
+let seedLog = [];   // {t, level, session, seed(hex), seedN}
+try{ seedLog = JSON.parse(localStorage.getItem('palette_obd2_seeds')||'[]'); }catch(e){}
+function seedSave(){ try{ localStorage.setItem('palette_obd2_seeds', JSON.stringify(seedLog.slice(-400))); }catch(e){} }
+let allowKey = false;   // 「鍵を試す」スイッチ（既定OFF）
+
+async function seedLab(){
+ if(!needCAN()) return;
+ extOut('=== 🔐 鍵の研究所（シード収集＋計算方法の割り出し） ===');
+ let keyTries = 0;   // 1回の実行でキーを送るのは最大1回（ロックアウト防止）
+ extOut('※停車・Pレンジで。シードをもらうのは読むだけで安全です' + (allowKey?'。⚠「鍵を試す」ON：この実行で最大1回だけキーを送ります':'。キー（答え）は送りません'));
+ await cmd('ATH1'); await cmd('ATST32');
+ for(const T of [{tx:'7E1', rx:'7E9', name:'CVT'}, {tx:'7E0', rx:'7E8', name:'エンジン'}]){
+  if(abortExt) break;
+  await cmd('ATSH'+T.tx); await cmd('ATCRA'+T.rx);
+  // 鍵の扉がある診断モードを探す（普通の状態＋よく使われる診断モード）
+  for(const ses of ['', '81','89','90','92','C0','01','83','85','60','03']){
+   if(abortExt) break;
+   if(ses){ const sp = canFrames(await cmd('10'+ses, 1500)).get(T.rx); if(!sp || sp[0]!==0x50) continue; await cmd('3E', 600); }
+   for(const lv of ['01','03','05','07','11','41','61','7D']){
+    if(abortExt) break;
+    const seeds = [];
+    for(let i=0;i<3 && !abortExt;i++){
+     const p = canFrames(await cmd('27'+lv, 1500)).get(T.rx);
+     if(!p){ break; }
+     if(p[0]===0x7F){ if(p[2]!==0x11 && p[2]!==0x12 && i===0) extOut(`  ${T.name} ${ses?'モード'+ses+' ':''}レベル${lv}：断り${hx(p[2])} ${NRC[hx(p[2])]||''}`); break; }
+     if(p[0]===0x67){ const sd = p.slice(2); seeds.push(sd); }
+     await cmd('3E', 500);
+    }
+    if(!seeds.length) continue;
+    const hexs = seeds.map(toHex);
+    const sz = seeds[0].length;
+    const allZero = seeds.every(s=>s.every(x=>x===0));
+    const stat = hexs.every(h=>h===hexs[0]);
+    extOut(`  🔑 ${T.name} ${ses?'モード'+ses+' ':''}レベル${lv}：シード${sz}バイト ${allZero?'（ぜんぶ0＝今は開いているか鍵不要）':stat?'（毎回おなじ＝固定シード。答えも固定で、1組わかれば永久に開く）':'（毎回ちがう＝動的）'}`);
+    for(const h of [...new Set(hexs)].slice(0,3)) extOut(`     シード例: ${h}`);
+    for(const s of seeds) seedLog.push({t:Date.now(), ecu:T.name, level:lv, session:ses||'通常', seed:toHex(s)});
+    seedSave();
+    // 4バイトのシードなら、図書館の計算方法で「このシードならキーはこれ」を全部出す（送らない・参考）
+    if(sz===4 && !allZero){
+     const s0 = u32(seeds[0]);
+     extOut('     ▼ 計算方法ごとの「答え（キー）」の候補:');
+     for(const a of KEYALGOS.slice(0,6)) extOut(`       ${a.n} → ${toHex(b4(a.f(s0)))}`);
+     // キーを試してよい設定なら、固定シードの時だけ1つ試す（動的シードは外で解析）
+     if(allowKey && stat && keyTries < 1){
+      keyTries++;
+      extOut('     ⚠ 鍵を試します（固定シードなので安全度高・この実行はこれで最後）');
+      const sp = canFrames(await cmd('10'+(ses||'01'), 1500)).get(T.rx);   // レベルに対応する診断モードに入れ直す
+      const fresh = canFrames(await cmd('27'+lv, 1500)).get(T.rx);
+      if(fresh && fresh[0]===0x67){
+       const key = b4(KEYALGOS[0].f(u32(fresh.slice(2))));
+       const kv = String(parseInt(lv,16)+1).padStart(2,'0'); const sendLv = hx(parseInt(lv,16)+1);
+       const resp = canFrames(await cmd('27'+sendLv+toHex(key).replace(/ /g,''), 2000)).get(T.rx);
+       extOut(`       送ったキー ${toHex(key)} → ${resp?toHex(resp):'返事なし'} ${resp&&resp[0]===0x67?'✅✅ 開いた！この計算方法が当たり':resp&&resp[0]===0x7F?'（不正解・理由'+hx(resp[2])+'）':''}`);
+      }
+     }
+    }
+   }
+  }
+ }
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ extOut(`=== 研究所おわり：これまで集めたシード ${seedLog.length}個。「探索結果コピー」で貼ってください ===`);
+ extOut('動的シード（毎回ちがう）の計算方法は、集めたシードをこちらで解析して割り出します。何回か実行してシードをためてください。');
+}
+
+// ===== 📥 ECUメモリ吸い出し：読める住所を全部読んで、プログラムを丸ごと取り出す（読むだけ） =====
+let dumpBuf = null;
+async function memDump(){
+ if(!needCAN()) return;
+ extOut('=== 📥 ECUメモリ吸い出し（ReadMemoryByAddress・読むだけ） ===');
+ await cmd('ATH1'); await cmd('ATST32');
+ const T = scanTargetNow();
+ await cmd('ATSH'+T.tx); await cmd('ATCRA'+T.rx);
+ extOut(`■ ${T.name}（${T.tx}）から読み出します`);
+ // まず、どの書き方＆1回に何バイト読めるかを確かめる
+ const forms = [
+  {n:'3バイト住所+1サイズ', mk:(a,n)=>'23'+hx(a>>>16&255)+hx(a>>>8&255)+hx(a&255)+hx(n)},
+  {n:'ALFID14 4住所+1サイズ', mk:(a,n)=>'2314'+toHex(b4(a)).replace(/ /g,'')+hx(n)},
+  {n:'ALFID24 4住所+2サイズ', mk:(a,n)=>'2324'+toHex(b4(a)).replace(/ /g,'')+hx(n>>>8&255)+hx(n&255)},
+  {n:'2バイト住所+1サイズ', mk:(a,n)=>'23'+hx(a>>>8&255)+hx(a&255)+hx(n)},
+ ];
+ let form=null, chunk=0;
+ for(const f of forms){
+  for(const n of [64, 32, 16, 8, 4]){
+   if(abortExt) return;
+   const p = canFrames(await cmd(f.mk(0, n), 2500)).get(T.rx);
+   if(p && p[0]===0x63){ form=f; chunk=n; extOut(`  ✅ 読める書き方: ${f.n} / 1回 ${n}バイト`); break; }
+   if(p && p[0]===0x7F && p[2]===0x33){ extOut(`  🔒 ${f.n}：鍵が必要（理由33）→ 先に「🔐 鍵の研究所」で開ける必要あり`); }
+  }
+  if(form) break;
+ }
+ if(!form){ extOut('  このECUは住所指定のメモリ読み出し(23)に対応していない／鍵が必要。研究所の結果を貼ってください'); await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); return; }
+ // 住所を上げながら、読めなくなるまで吸い出す（最大256KB・時間が来たら中断でOK、続きから再開）
+ const start = (dumpBuf && dumpBuf.ecu===T.name) ? dumpBuf.next : 0;
+ if(!dumpBuf || dumpBuf.ecu!==T.name) dumpBuf = {ecu:T.name, map:{}, next:0};
+ let a = start, read=0, fail=0, t0=Date.now();
+ while(!abortExt && a < 0x40000 && fail < 24){
+  const p = canFrames(await cmd(form.mk(a, chunk), 2500)).get(T.rx);
+  if(p && p[0]===0x63){ const d = p.slice(1); dumpBuf.map[a]=toHex(d).replace(/ /g,''); read += d.length; dumpBuf.next=a+chunk; a+=chunk; fail=0; }
+  else { fail++; a+=chunk; }
+  if(read % 512 < chunk){ const kb=(Object.keys(dumpBuf.map).length*chunk/1024).toFixed(1); $('scanProg').textContent=`吸い出し中… 住所0x${a.toString(16)} / ${kb}KB / ${((Date.now()-t0)/1000|0)}秒`; }
+  if(Date.now()-t0 > 180000){ extOut('  3分たったので一旦止めます（次に押すと続きから）'); break; }
+ }
+ try{ await IDB.put('palette_obd2_dump_'+T.name, dumpBuf); }catch(e){}
+ const kb = (Object.keys(dumpBuf.map).length*chunk/1024).toFixed(1);
+ extOut(`  取り出し ${kb}KB（住所0x0〜0x${dumpBuf.next.toString(16)}）。`);
+ extOut('  「📥 吸い出したデータをファイルで送る」でファイルにして貼ってください。プログラムを解析して、鍵の計算方法・故障コード表・CVTデータの正体・学習リセットの命令を探します。');
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+}
+function scanTargetNow(){ const v=($('scanTarget')||{}).value||'7E1|7E9'; const [tx,rx]=v.split('|'); return {tx, rx, name: tx==='7E0'?'エンジン':'CVT'}; }
+async function dumpFile(){
+ if(!dumpBuf || !Object.keys(dumpBuf.map).length){ try{ dumpBuf = await IDB.get('palette_obd2_dump_CVT') || await IDB.get('palette_obd2_dump_エンジン'); }catch(e){} }
+ if(!dumpBuf || !Object.keys(dumpBuf.map).length){ toast('先にメモリ吸い出しをしてください'); return; }
+ const L = ['# スズキ パレットSW ECUメモリ吸い出し', `# ${dumpBuf.ecu} / ${new Date().toLocaleString('ja-JP')}`, '# 住所(16進),データ(16進)'];
+ for(const a of Object.keys(dumpBuf.map).map(Number).sort((x,y)=>x-y)) L.push(a.toString(16).padStart(6,'0')+','+dumpBuf.map[a]);
+ const txt = L.join('\n'), name = `palette_dump_${dumpBuf.ecu}_${Date.now()}.txt`;
+ try{ const file = new File([txt], name, {type:'text/plain'}); if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file]}); return; } }catch(e){ if(e&&e.name==='AbortError') return; }
+ try{ const url=URL.createObjectURL(new Blob([txt])); const el=document.createElement('a'); el.href=url; el.download=name; el.click(); setTimeout(()=>URL.revokeObjectURL(url),60000); toast('保存しました'); }catch(e){ await copy(txt); }
+}
+
+// ===== 奥の扉探し：Gスキャン/SDTが使う「隠れた診断モード」「鍵」「メモリ読み出し」を、読むだけの命令で探す =====
+// 送らない命令：書き込み(2E/3B)・作動(2F/30)・学習/ルーチン(31)・消去(14/04)・リセット(11)・書き込み準備(34〜37)・鍵の答え(27の偶数)・プログラミングモード(10 02/10 85)
+const VAULT_FORBID = /^(04|11|14|2E|2F|30|31|32|33|34|35|36|37|3B|3D|1002|1085)/;
+function vaultSafe(c){ if(VAULT_FORBID.test(c)) return false; if(/^27/.test(c)) return (parseInt(c.slice(2,4),16)&1)===1; return true; }
+async function vaultOne(tx, rx, c, to=1500){
+ if(!vaultSafe(c)){ extOut('  （安全のため送らない：'+c+'）'); return null; }
+ return canFrames(await cmd(c, to)).get(rx) || null;
+}
+async function vaultMem(T, tag){
+ const out = [];
+ const addrs = ['000000','008000','010000','020000','040000','080000','0F0000','FFFF00','FF8000','200000'];
+ for(const a of addrs){
+  if(abortExt) break;
+  for(const c of ['23'+a+'04', '2314'+'00'+a+'04', '2324'+'00'+a+'0004']){
+   const p = await vaultOne(T.tx, T.rx, c);
+   if(!p) { out.push(`${c}:返事なし`); continue; }
+   if(p[0]===0x63){ extOut(`  ✅✅ メモリが読めた！ ${tag} ${c} → ${toHex(p)}`); out.push(`${c}:OK`); }
+   else if(p[0]===0x7F) out.push(`${c}:断り${hx(p[2]||0)}`);
+   else out.push(`${c}:${toHex(p.slice(0,4))}`);
+  }
+  if(out.slice(-3).every(x=>/断り11/.test(x))) break;   // 23番の命令そのものが無い
+ }
+ const g = {}; for(const x of out){ const r = x.split(':')[1]; (g[r] ||= []).push(x.split(':')[0]); }
+ for(const [r,l] of Object.entries(g)) extOut(`  メモリ読み出し(23) ${tag}：${r==='OK'?'✅読めた':r} ← ${l.slice(0,6).join(', ')}${l.length>6?' ほか'+(l.length-6)+'件':''}`);
+}
+async function vaultSeeds(T, tag){
+ const res = [];
+ for(const sf of ['01','03','05','07','09','0B','11','41','61']){
+  if(abortExt) break;
+  const p = await vaultOne(T.tx, T.rx, '27'+sf);
+  if(!p) continue;
+  if(p[0]===0x67) res.push(`✅ 27 ${sf} → 鍵の問題（シード）: ${toHex(p.slice(2))}`);
+  else if(p[0]===0x7F && p[2]!==0x11 && p[2]!==0x12) res.push(`⚠ 27 ${sf} → 断り${hx(p[2])} ${NRC[hx(p[2])]||''}`);
+ }
+ extOut(`  鍵(27) ${tag}：` + (res.length ? '' : 'このモードでは鍵の扉なし'));
+ for(const r of res) extOut('   '+r);
+}
+async function vaultProbe(){
+ if(!needCAN()) return;
+ extOut('=== 奥の扉探し（読むだけ。書き込み・学習・消去・リセット・プログラミングは送りません） ===');
+ extOut('※停車・Pレンジで実行してください');
+ await cmd('ATH1'); await cmd('ATST32');
+ for(const T of [{tx:'7E1', rx:'7E9', name:'CVT'}, {tx:'7E0', rx:'7E8', name:'エンジン'}]){
+  if(abortExt) break;
+  await cmd('ATSH'+T.tx); await cmd('ATCRA'+T.rx);
+  extOut(`■ ${T.name}（${T.tx}）`);
+  // ① 診断モードの番号を全部試す（入れたら、その中で鍵とメモリを確認して、すぐ抜ける）
+  const acc = [], ng = {};
+  for(let x=1; x<=0xFF && !abortExt; x++){
+   const c = '10'+hx(x);
+   if(!vaultSafe(c)) continue;
+   $('scanProg').textContent = `${T.name} 診断モード ${hx(x)} を確認中…`;
+   const p = await vaultOne(T.tx, T.rx, c, 1200);
+   if(!p){ (ng['返事なし'] ||= []).push(hx(x)); continue; }
+   if(p[0]===0x50){
+    acc.push(hx(x)); extOut(`  ✅ 診断モード ${hx(x)} に入れた（${toHex(p)}）`);
+    await vaultSeeds(T, `モード${hx(x)}`);
+    await vaultMem(T, `モード${hx(x)}`);
+    // そのモードで読めるデータ番号
+    const ids = [];
+    for(let i=0;i<=0xFF && !abortExt;i++){ const q = await vaultOne(T.tx, T.rx, '21'+hx(i), 800); if(q && q[0]===0x61) ids.push(hx(i)); if(i%16===0) await cmd('3E', 800); }
+    extOut(`  モード${hx(x)}で読めるデータ番号(21)：${ids.join(' ')||'なし'}`);
+    await cmd('20', 1000); await sleepMs(2500);   // 診断を終了して普通の状態に戻す
+    continue;
+   }
+   const k = p[0]===0x7F ? '断り'+hx(p[2]||0)+' '+(NRC[hx(p[2]||0)]||'') : toHex(p.slice(0,3));
+   (ng[k] ||= []).push(hx(x));
+  }
+  extOut(`  入れた診断モード：${acc.join(' ')||'なし'}`);
+  for(const [k,v] of Object.entries(ng)) extOut(`  ${k}：${v.length}個（${v.slice(0,12).join(' ')}${v.length>12?' …':''}）`);
+  // ② 普通の状態での鍵とメモリ
+  if(!abortExt){ await vaultSeeds(T, '普通の状態'); await vaultMem(T, '普通の状態'); }
+ }
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ extOut('=== 扉探しおわり：「探索結果コピー」で貼ってください ===');
+}
 async function sdtProbe(){
  if(!needCAN()) return;
  const A = {tx:'7E1', rx:'7E9', name:'AT（CVT）'};
@@ -2169,6 +2726,19 @@ async function hunt(onlyAT){
 $('btnHunt').onclick = ()=>withPause(()=>hunt(false));
 $('btnCvtDtc').onclick = ()=>withPause(()=>hunt(true));
 $('btnAtScan').onclick = ()=>withPause(atScan);
+$('btnObdAll').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(obdAll); };
+$('btnCrank').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(crankTest); };
+$('btnClear04').onclick = ()=>{
+ const b = $('btnClear04');
+ if(Date.now()-clear04Armed > 4000){ clear04Armed = Date.now(); b.textContent = '本当に消す？（記録と準備状態が消えます）もう一度押す'; setTimeout(()=>{ b.textContent='🧹 エンジンの故障コード消去（エンジン停止・キーONで）'; }, 4000); return; }
+ clear04Armed = 0; b.textContent='🧹 エンジンの故障コード消去（エンジン停止・キーONで）';
+ extLines = []; $('extOut').textContent=''; withPause(clear04);
+};
+$('btnVault').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(vaultProbe); };
+$('btnSeed').onclick = ()=>{ allowKey = $('chkKey').checked; extLines = []; $('extOut').textContent=''; withPause(seedLab); };
+$('btnDump').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(memDump); };
+$('btnDumpFile').onclick = dumpFile;
+$('btnSniff').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sniff); };
 $('btnSdt').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sdtProbe); };
 $('btnAtForget').onclick = ()=>{ atMap=[]; atHist.length=0; try{ localStorage.removeItem(ATMAPKEY); }catch(e){} toast('覚えた解読を消しました'); };
 $('btnCvtTest').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(cvtTest); };
@@ -2223,7 +2793,12 @@ $('tCanvas').addEventListener('wheel', e=>{ e.preventDefault(); const p=tPos(e);
 $('tZin').onclick = ()=>{ const v=tv.view; v&&camZoomAt(v.W/2,v.H/2,1); };
 $('tZout').onclick = ()=>{ const v=tv.view; v&&camZoomAt(v.W/2,v.H/2,-1); };
 $('tZfit').onclick = ()=>{ tv.cam=null; tripsDraw(tv.pts, tv.evsDraw); };
-$('tInfo').addEventListener('click', e=>{ const d=e.target.closest('.ev'); if(d && e.target.tagName!=='A'){ tv.sel=+d.dataset.k; tripsRender(); } });
+$('tInfo').addEventListener('click', e=>{
+ if(e.target.tagName==='A') return;
+ const ch = e.target.closest('.chip'); if(ch){ const k = ch.dataset.cat; tv.hide ||= new Set(); tv.hide.has(k) ? tv.hide.delete(k) : tv.hide.add(k); tv.sel=-1; tripsRender(); return; }
+ const tr = e.target.closest('.trip'); if(tr && tr.dataset.trip!=null && tv.trip<0){ tv.trip = +tr.dataset.trip; tv.sel=-1; tripsRender(); return; }
+ const d = e.target.closest('.ev'); if(d){ tv.sel=+d.dataset.k; tripsRender(); }
+});
 window.addEventListener('resize', ()=>{ if(!$('trips').hidden) tripsRender(); });
 $('btnMark').onclick = ()=>{ if(!samples.length){ toast('記録中に押してください'); return; } lastEv.mark = 0; addEvent(Date.now(),'mark','手動の印（この前2分のどこかで違和感）'); saveLog(); };
 document.addEventListener('visibilitychange', async ()=>{ if(document.visibilityState==='visible' && running){ try{ await navigator.wakeLock?.request('screen'); }catch(e){} } });
@@ -2258,6 +2833,18 @@ $('btnStop').onclick = stop;
 $('btnDtc').onclick = ()=>withPause(readDtc);
 $('btnCopy').onclick = ()=>copy(summaryText());
 $('btnFull').onclick = shareFull;
+// ===== ジャンル別タブ =====
+let curTab = 'live';
+function showTab(t){
+ if(t==='map'){ tripsOpen(); return; }
+ curTab = t;
+ document.querySelectorAll('section.tab').forEach(sec=>sec.hidden = sec.dataset.tab!==t);
+ $('extPanel').hidden = !['diag','cvt','lab'].includes(t);
+ document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
+ try{ localStorage.setItem('palette_obd2_tab', t); }catch(e){}
+}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick = ()=>showTab(b.dataset.tab));
+try{ const t = localStorage.getItem('palette_obd2_tab'); if(t && t!=='map') showTab(t); }catch(e){}
 let needProbe = false;
 function fastLabel(){ $('btnFast').textContent = '⚡ 高速読み取り：' + (fastMode ? 'ON' : 'OFF'); $('btnFast').classList.toggle('primary', fastMode); }
 fastLabel();
