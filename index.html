@@ -152,6 +152,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 </div>
 <button class="ext primary" id="btnCvtTest" style="width:100%;margin:6px 0">🧪 CVT点検（停車中・約70秒・P→R→N→Dのつながり時間を測る）</button>
 <button class="ext" id="btnCvtDtc" style="width:100%;margin:6px 0">🔧 CVTの故障コード・履歴を読む（全方式で総当たり）</button>
+<button class="ext primary" id="btnSdt" style="width:100%;margin:6px 0">🧭 SDT方式の窓口探し（CVTの故障コードの読み方を探す・停車中約2〜3分）</button>
 <p class="hint">・<b>CVT診断モードON</b>で走ると、毎回CVTの値も読み、「止まる直前にロックアップが切れない（エンストの原因）」「回転だけ吹け上がる（滑り）」「副変速の切り替わり」を自動で拾って、Claude用コピーに【CVT診断】として入れます。<br>・CVT点検・故障コードの結果は下の「探索結果コピー」で貼ってください。</p>
 
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
@@ -457,7 +458,7 @@ function demoTransport(){
    const spd = Math.max(0, 30 + 25*Math.sin(t/4 - .5));
    let r = '?';
    if(c.startsWith('ATSH')) hdr = c.slice(4);
-   if(c.startsWith('ATCRA')){ if(c.length>5) cra = c.slice(5); setTimeout(()=>onData(ec+(c.length>5?'OK':'?')+'\r\r>'), 20); return; }
+   if(c.startsWith('ATCRA')){ cra = c.length>5 ? c.slice(5) : ''; setTimeout(()=>onData(ec+'OK\r\r>'), 20); return; }
    if(c==='ATWS') cra = '';
    if(!c.startsWith('AT') && !hon && cra && cra!=='7E8'){ setTimeout(()=>onData(ec+'NO DATA\r\r>'), 30); return; }
    if(c==='ATH1') hon = true;
@@ -1873,6 +1874,79 @@ async function rawRec(){
  extOut('=== 記録おわり：「探索結果コピー」で貼ってください ===');
 }
 
+// ===== SDT方式の窓口探し：CVTコンピューターが「どの命令なら返事をするか」を全部調べる =====
+// 読み取り専用の命令だけ（消去04/14・書込2E/3B・作動2F/30/31・リセット11・鍵27・書換34/36・プログラミング1085 は絶対に送らない）
+const SDT_FORBID = /^(04|14|2E|2F|30|31|3B|11|27|34|35|36|37|1085|1002|1086|1087)/;
+async function sdtProbe(){
+ if(!needCAN()) return;
+ const A = {tx:'7E1', rx:'7E9', name:'AT（CVT）'};
+ extOut('=== SDT方式の窓口探し ===');
+ // ① 全員に向けて聞く（エンジン以外の返事も全部拾う）
+ extOut('■ ① 全員に向けた故障コード要求（7DF・返事は相手ごとに表示）');
+ await cmd('ATH1'); await cmd('ATSH7DF'); await cmd('ATCRA'); await cmd('ATST32');
+ for(const [c,label] of [['0100','対応確認'],['03','記録済み'],['07','保留'],['0A','永久'],['0101','警告灯状態']]){
+  if(abortExt) break;
+  const m = canFrames(await cmd(c, 6000));
+  if(!m.size){ extOut(`  ${label} ${c}：だれも返事なし`); continue; }
+  for(const [rx,p] of m){
+   const who = rx==='7E8'?'エンジン':rx==='7E9'?'CVT':('ECU '+rx);
+   const codes = (p[0]===0x43||p[0]===0x47||p[0]===0x4A) ? (()=>{ const out=[]; for(let i=2;i+2<=p.length;i+=2){ if(p[i]|p[i+1]) out.push(decodeDtc(hx(p[i])+hx(p[i+1]))); } return out; })() : null;
+   extOut(`  ${label} ${c} ← ${who}：${toHex(p)}${codes ? '  ⇒ '+(codes.length?codes.join(', '):'コードなし') : ''}`);
+  }
+ }
+ // ② CVTに直接、読み取り系の命令を1つずつ送り、返事の有無と断り方（7F）を記録する
+ extOut('■ ② CVT（7E1）が受け付ける命令の洗い出し');
+ const tries = [
+  '3E','3E00','3E01','3E02','1001','1081','1089','1090','1092','10C0',
+  '0100','0101','0120','03','07','0A','0900','0902','0904',
+  '13','1300','17','1700','17FF00','170000',
+  '1800','180000','18000000','1800FF00','1800FFFF','1801FF00','1802FF00','1802FFFF','1803FF00','1804FF00','18FFFF00',
+  '12','1200','120000','12000000','1201','120100','1203',
+  '1901FF','1902FF','19020D','19028F','190A','1903',
+  '22F180','22F181','22F186','22F187','22F18A','22F18C','22F190','22F195','22F197','220100','221000','222000',
+  '2100','2101','2102','2103','2105','2110','2120','2180','21FF',
+  '1A80','1A90','1A9A'];
+ await cmd('ATSH7E1'); await cmd('ATCRA7E9'); await cmd('ATST32');
+ const ok = [], ng = {}, none = [];
+ for(const c of tries){
+  if(abortExt){ extOut('中止しました'); break; }
+  if(SDT_FORBID.test(c)) continue;
+  $('scanProg').textContent = `CVT ${c} を試し中…（${tries.indexOf(c)+1}/${tries.length}）`;
+  const p = canFrames(await cmd(c, 4000)).get('7E9');
+  if(!p){ none.push(c); continue; }
+  if(p[0]===0x7F){ const k = `${hx(p[1]||0)}番の命令は存在・断り理由 ${hx(p[2]||0)} ${NRC[hx(p[2]||0)]||''}`; (ng[k] ||= []).push(c); continue; }
+  ok.push(c);
+  const codes = parseDtcResp(p, p[0]);
+  extOut(`  ✅ ${c} → ${toHex(p)}${codes.length ? '  ⇒ '+codes.join(', ') : ''}`);
+ }
+ for(const [k,v] of Object.entries(ng)) extOut(`  ⚠ ${k}：${v.join(', ')}`);
+ extOut(`  返事なし（その命令自体が無い）：${none.length}件（${none.join(', ')}）`);
+ // ③ セッションを切り替えたあとにもう一度（SDTはまず診断モードに入ってから読む）
+ for(const ses of ['1081','1089','1092','10C0','1001']){
+  if(abortExt) break;
+  const sp = canFrames(await cmd(ses, 3000)).get('7E9');
+  if(!sp || sp[0]===0x7F) continue;
+  extOut(`■ ③ 診断モード ${ses} に入れた（${toHex(sp)}）→ 故障コード命令を再挑戦`);
+  for(const c of ['1800FF00','1802FF00','18000000','1902FF','13','17FF00','03']){
+   const p = canFrames(await cmd(c, 4000)).get('7E9');
+   extOut(`  ${c} → ${p ? toHex(p) : '返事なし'}${p && p[0]!==0x7F ? '  ⇒ '+parseDtcResp(p,p[0]).join(', ') : ''}`);
+   await cmd('3E00', 1500);
+  }
+ }
+ // ④ CVTが別の住所で待っていないか（7E0〜7E7・7DF以外の窓口）
+ extOut('■ ④ 別の窓口の確認（7E2〜7E7・760〜7FF付近にテスター応答）');
+ await cmd('ATCRA'); await cmd('ATST19');
+ for(const tx of ['7E2','7E3','7E4','7E5','7E6','7E7','740','750','760','770','7A0','7B0','7C0','7D0','7D2','7D4']){
+  if(abortExt) break;
+  await cmd('ATSH'+tx);
+  const m = canFrames(await cmd('3E00', 1500));
+  const m2 = m.size ? m : canFrames(await cmd('0100', 1500));
+  for(const [rx,p] of m2) extOut(`  ✅ ${tx} に送ったら ${rx} が返事：${toHex(p)}`);
+ }
+ await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ extOut(ok.length || Object.keys(ng).length ? '=== 窓口探しおわり：「探索結果コピー」で貼ってください（返事のあった命令から、SDTの読み方を組み立てます） ===' : '=== 窓口探しおわり：CVTは21・1A以外の命令に一切返事なし。「探索結果コピー」で貼ってください ===');
+}
+
 // ===== 故障履歴の徹底捜索：読み取り命令の書き方を総当たり =====
 const NRC = {'10':'拒否','11':'その命令は無い','12':'書き方が違う','13':'長さが違う','22':'今は条件が合わない','31':'範囲外','33':'鍵が必要','78':'処理中','7E':'今のモードでは不可','7F':'今のモードでは不可'};
 async function hunt(onlyAT){
@@ -1915,6 +1989,7 @@ async function hunt(onlyAT){
 $('btnHunt').onclick = ()=>withPause(()=>hunt(false));
 $('btnCvtDtc').onclick = ()=>withPause(()=>hunt(true));
 $('btnAtScan').onclick = ()=>withPause(atScan);
+$('btnSdt').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sdtProbe); };
 $('btnAtForget').onclick = ()=>{ atMap=[]; atHist.length=0; try{ localStorage.removeItem(ATMAPKEY); }catch(e){} toast('覚えた解読を消しました'); };
 $('btnCvtTest').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(cvtTest); };
 function cvtBtn(){ $('btnCvtMode').textContent = '⚙️ CVT診断モード：'+(cvtOn?'ON（走行中も毎回CVTを読む）':'OFF'); if(!cvtOn) $('cvtLive').textContent='CVT：モードOFF'; }
