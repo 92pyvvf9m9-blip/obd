@@ -201,7 +201,8 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <button class="ext primary" id="btnVault" style="width:100%;margin:6px 0">🔓 ①奥の扉探し（隠れた診断モード・鍵の有無・メモリ読み出しを調べる／読むだけ・停車中P・約3〜4分）</button>
 <button class="ext primary" id="btnSeed" style="width:100%;margin:6px 0">🔐 ②鍵の研究所（シードを集めて、答えの計算方法を割り出す／読むだけ）</button>
 <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);margin:0 0 6px"><input type="checkbox" id="chkKey" style="width:20px;height:20px"> ⚠ 鍵を1つだけ試す（固定シードの時だけ・1回に1つ）。不安なら<b>OFFのまま</b>でOK</label>
-<button class="ext primary" id="btnDump" style="width:100%;margin:6px 0">📥 ③ECUメモリ吸い出し（プログラムを丸ごと取り出す／読むだけ・最長3分・続きから再開可）</button>
+<button class="ext primary" id="btnMap" style="width:100%;margin:6px 0">🗺 ③メモリ地図（データの入っている場所を探す／読むだけ・停車中P・約2〜3分）</button>
+<button class="ext primary" id="btnDump" style="width:100%;margin:6px 0">📥 ④ECUメモリ吸い出し（見つけた場所を丸ごと取り出す／読むだけ・最長3分・続きから再開可）</button>
 <button class="ext" id="btnDumpFile" style="width:100%;margin:6px 0">📤 吸い出したデータをファイルで送る</button>
 <div class="hint" style="margin:0 0 8px">③で取り出したプログラムをこちらで解析すると、<b>鍵の計算方法・CVTデータの正体・故障コード表・学習リセットの命令</b>が中から見つかる可能性があります。対象ECUは下の「対象」で切り替え。</div>
 <button class="ext primary" id="btnSniff" style="width:100%;margin:6px 0">🎧 診断機の通信を記録（Gスキャン・SDTが送る命令を覚える／こちらからは何も送らない）</button>
@@ -572,12 +573,18 @@ function demoTransport(){
     else if(/^27[0-9A-F]{2}$/.test(c) && hdr==='7E1') r = fr(parseInt(c.slice(2,4),16)&1 ? '67'+c.slice(2,4)+'1A2B3C4D' : '7F2724');
     else if(c.startsWith('27')) r = fr('7F2712');
     else if(/^23/.test(c) && hdr==='7E1'){
-     if(!unlocked) r = fr('7F2333');
-     else { const m=c.match(/^23(14|24)?([0-9A-F]+)$/); let addr=0,n=8; const body=c.slice(2);
-      if(c.startsWith('2314')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,14),16); }
-      else if(c.startsWith('2324')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,16),16); }
-      else if(body.length>=8){ addr=parseInt(body.slice(0,6),16); n=parseInt(body.slice(6,8),16); }
-      if(addr>0x30000){ r=fr('7F2331'); } else { let d='63'; for(let i=0;i<Math.min(n,64);i++) d+=h((addr+i*7+0x4B)&255); r=fr(d); } }
+     const body=c.slice(2); let addr=0,n=8, ok=true;
+     if(c.startsWith('2314')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,14),16); }
+     else if(c.startsWith('2324')){ addr=parseInt(c.slice(4,12),16); n=parseInt(c.slice(12,16),16); }
+     else if(body.length>=8){ addr=parseInt(body.slice(0,6),16); n=parseInt(body.slice(6,8),16); }
+     else { ok=false; r=fr('7F2312'); }
+     if(ok){
+      // 実車と同じ：3バイト住所だけ受け付け、ほとんどFF、本物データは特定の窓だけ
+      const inFlash = (addr>=0x090000 && addr<0x0B0000) || (addr>=0x100000 && addr<0x108000);
+      let d='63';
+      for(let i=0;i<Math.min(n,6);i++){ const A=addr+i; d += inFlash ? h((A*7+0x4B)&255) : 'FF'; }
+      r=fr(d);
+     }
     }
     else if(c.startsWith('23')) r = fr('7F2311');
     else if(c==='20') r = fr('60');
@@ -2485,6 +2492,62 @@ async function seedLab(){
 
 // ===== 📥 ECUメモリ吸い出し：読める住所を全部読んで、プログラムを丸ごと取り出す（読むだけ） =====
 let dumpBuf = null;
+let dumpRegions = null;   // メモリ地図で見つけた「データのある住所の範囲」
+
+// FF/00 だけか、本物データかを判定（住所エコー分は末尾3バイトを無視）
+function dataClass(bytes, size){
+ const d = bytes.slice(0, size);
+ let ff=0, zero=0, other=0;
+ for(const x of d){ if(x===0xFF) ff++; else if(x===0x00) zero++; else other++; }
+ if(other>0) return 'DATA';
+ if(zero>0 && ff===0) return 'ZERO';
+ return 'FF';
+}
+
+// ===== 🗺 メモリ地図：住所空間をざっと走査して、中身のある場所を見つける =====
+async function memMap(){
+ if(!needCAN()) return;
+ extOut('=== 🗺 メモリ地図（データのある場所を探す・読むだけ） ===');
+ await cmd('ATH1'); await cmd('ATST32');
+ const T = scanTargetNow();
+ await cmd('ATSH'+T.tx); await cmd('ATCRA'+T.rx);
+ extOut(`■ ${T.name}（${T.tx}）`);
+ // 使える書き方を確認（3バイト住所＋サイズが本命。鍵不要のはず）
+ const mk = (a,n)=>'23'+hx(a>>>16&255)+hx(a>>>8&255)+hx(a&255)+hx(n);
+ const probe = await vaultOne(T.tx, T.rx, mk(0,8), 2000);
+ if(!probe || probe[0]!==0x63){
+  if(probe && probe[0]===0x7F && probe[2]===0x33) extOut('  🔒 メモリ読み出しに鍵が必要（理由33）。先に鍵を入手する必要あり');
+  else extOut('  この書き方のメモリ読み出し(23)に反応なし：'+(probe?toHex(probe):'返事なし'));
+  await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); return;
+ }
+ extOut('  ✅ 3バイト住所＋サイズで読めます。全体をざっと探します…');
+ const SIZE = 4, STEP = 0x8000, END = 0x1000000;   // 32KBごとに、16MBぶんを確認
+ const regions = []; let cur = null, hits = 0, probes = 0; const t0 = Date.now();
+ for(let a=0; a<END && !abortExt; a+=STEP){
+  const p = await vaultOne(T.tx, T.rx, mk(a, SIZE), 900); probes++;
+  const cls = (p && p[0]===0x63) ? dataClass(p.slice(1), SIZE) : (p && p[0]===0x7F ? 'NR'+hx(p[2]||0) : 'NONE');
+  if(cls==='DATA'){
+   hits++;
+   if(cur) cur.end = a+STEP; else { cur = {start:a, end:a+STEP, sample:toHex(p.slice(1,1+SIZE))}; }
+  } else if(cur){ regions.push(cur); extOut(`  ✅ データ発見：0x${cur.start.toString(16)}〜0x${cur.end.toString(16)}（例 ${cur.sample}）`); cur=null; }
+  if(probes % 8 === 0) $('scanProg').textContent = `地図作成中… 0x${a.toString(16)} / 発見 ${regions.length+(cur?1:0)}ヶ所 / ${((Date.now()-t0)/1000|0)}秒`;
+  if(Date.now()-t0 > 240000){ extOut('  4分たったので一旦止めます'); break; }
+ }
+ if(cur) { regions.push(cur); extOut(`  ✅ データ発見：0x${cur.start.toString(16)}〜0x${cur.end.toString(16)}（例 ${cur.sample}）`); }
+ extOut(`  走査 ${probes}ヶ所 / データのある範囲 ${regions.length}ヶ所`);
+ if(!regions.length){
+  extOut('  ⚠ 全部カラ(FF)でした。このECUはメモリ読み出し(23)で中身を出さない作り（安全ロック）か、別の住所系かもしれません。');
+  extOut('  → この道は手づまり。鍵を入手して「作業サポート」を使う方向が本筋になります。');
+ } else {
+  dumpRegions = {ecu:T.name, regions, step:STEP};
+  try{ await IDB.put('palette_obd2_regions_'+T.name, dumpRegions); }catch(e){}
+  const kb = regions.reduce((s,r)=>s+(r.end-r.start),0)/1024;
+  extOut(`  合計 約${kb.toFixed(0)}KB ぶんに中身がありそうです。「📥 ④メモリ吸い出し」を押すと、この場所だけを細かく取り出します。`);
+ }
+ await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8');
+ extOut('=== 地図おわり：「探索結果コピー」で貼ってください ===');
+}
+
 async function memDump(){
  if(!needCAN()) return;
  extOut('=== 📥 ECUメモリ吸い出し（ReadMemoryByAddress・読むだけ） ===');
@@ -2511,16 +2574,29 @@ async function memDump(){
  }
  if(!form){ extOut('  このECUは住所指定のメモリ読み出し(23)に対応していない／鍵が必要。研究所の結果を貼ってください'); await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); return; }
  // 住所を上げながら、読めなくなるまで吸い出す（最大256KB・時間が来たら中断でOK、続きから再開）
- const start = (dumpBuf && dumpBuf.ecu===T.name) ? dumpBuf.next : 0;
+ // メモリ地図で見つけた範囲があればそこだけ、無ければ地図を先に促す
+ if((!dumpRegions || dumpRegions.ecu!==T.name)){ try{ dumpRegions = await IDB.get('palette_obd2_regions_'+T.name); }catch(e){} }
+ if(!dumpRegions || dumpRegions.ecu!==T.name || !dumpRegions.regions.length){
+  extOut('  ⚠ まだ「🗺 メモリ地図」でデータの場所を探していません。先に地図を作ると、空っぽ(FF)を避けて中身だけ吸い出せます。');
+  extOut('  （このまま住所0から読むと、今日の結果では全部FFになります）');
+  await cmd('ATH0'); await cmd('ATSH7DF'); await cmd('ATCRA7E8'); return;
+ }
+ // 見つかった範囲を、少し広め（前後1ブロック）に取り出す
+ const blocks = [];
+ for(const rg of dumpRegions.regions){ for(let a=Math.max(0,rg.start-dumpRegions.step); a<rg.end+dumpRegions.step; a+=chunk) blocks.push(a); }
  if(!dumpBuf || dumpBuf.ecu!==T.name) dumpBuf = {ecu:T.name, map:{}, next:0};
- let a = start, read=0, fail=0, t0=Date.now();
- while(!abortExt && a < 0x40000 && fail < 24){
+ const startIdx = dumpBuf.idx||0;
+ let read=0, fail=0, t0=Date.now(), i=startIdx;
+ for(; i<blocks.length && !abortExt; i++){
+  const a = blocks[i];
+  if(dumpBuf.map[a]){ continue; }
   const p = canFrames(await cmd(form.mk(a, chunk), 2500)).get(T.rx);
-  if(p && p[0]===0x63){ const d = p.slice(1); dumpBuf.map[a]=toHex(d).replace(/ /g,''); read += d.length; dumpBuf.next=a+chunk; a+=chunk; fail=0; }
-  else { fail++; a+=chunk; }
-  if(read % 512 < chunk){ const kb=(Object.keys(dumpBuf.map).length*chunk/1024).toFixed(1); $('scanProg').textContent=`吸い出し中… 住所0x${a.toString(16)} / ${kb}KB / ${((Date.now()-t0)/1000|0)}秒`; }
+  if(p && p[0]===0x63){ const d = p.slice(1); dumpBuf.map[a]=toHex(d.slice(0,chunk)).replace(/ /g,''); read += chunk; fail=0; }
+  else { fail++; }
+  if(i % 8 === 0){ const kb=(Object.keys(dumpBuf.map).length*chunk/1024).toFixed(1); $('scanProg').textContent=`吸い出し中… ${i}/${blocks.length}ブロック / ${kb}KB / ${((Date.now()-t0)/1000|0)}秒`; }
   if(Date.now()-t0 > 180000){ extOut('  3分たったので一旦止めます（次に押すと続きから）'); break; }
  }
+ dumpBuf.idx = i;
  try{ await IDB.put('palette_obd2_dump_'+T.name, dumpBuf); }catch(e){}
  const kb = (Object.keys(dumpBuf.map).length*chunk/1024).toFixed(1);
  extOut(`  取り出し ${kb}KB（住所0x0〜0x${dumpBuf.next.toString(16)}）。`);
@@ -2736,6 +2812,7 @@ $('btnClear04').onclick = ()=>{
 };
 $('btnVault').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(vaultProbe); };
 $('btnSeed').onclick = ()=>{ allowKey = $('chkKey').checked; extLines = []; $('extOut').textContent=''; withPause(seedLab); };
+$('btnMap').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(memMap); };
 $('btnDump').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(memDump); };
 $('btnDumpFile').onclick = dumpFile;
 $('btnSniff').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sniff); };
