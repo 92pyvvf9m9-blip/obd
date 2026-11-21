@@ -261,6 +261,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
  <button id="btnExtCopy" class="primary">探索結果コピー</button>
  <button id="btnExtClear">表示クリア</button>
 </div>
+<div class="hint" style="margin-top:2px">※どの探索も結果は自動で保存され、「探索結果コピー」で<b>これまで全部まとめて</b>コピーされます（画面には最新だけ表示）。「表示クリア」は画面だけ消去。履歴ごと消すには2回押し。</div>
 
 </section>
 <section class="tab" data-tab="lab" hidden>
@@ -1900,6 +1901,27 @@ const ECU_NAMES = {'7E0':'エンジン','7E1':'AT（ミッション）','7E2':'E
 const SAFE = /^(AT(RV|DPN?|I|@1|H[01]|S[01]|ST[0-9A-F]{2}|SH[0-9A-F]{3}([0-9A-F]{3})?|CRA([0-9A-F]{3})?|AR)|0[1235679A][0-9A-F]*|1[3789A][0-9A-F]*|2[12][0-9A-F]+|3E0[01]|1081|1003)$/;
 
 function extOut(t){ extLines.push(t); const o=$('extOut'); o.textContent=extLines.join('\n'); o.scrollTop=o.scrollHeight; }
+// ===== 探索結果を1つずつ全部ためておく（上書きで消えないように） =====
+let extHistory = [];            // 過去の探索結果 {t, title, text}
+let extTitle = '';
+function extFlush(){            // いま画面に出ている結果を履歴に移す（移したら空にして二重保存を防ぐ）
+ if(extLines.length){ extHistory.push({t:Date.now(), title:extTitle||'探索', text:extLines.join('\n')});
+  if(extHistory.length>30) extHistory=extHistory.slice(-30);
+  try{ IDB.put('palette_obd2_exthist', extHistory); }catch(e){}
+  extLines = []; }
+}
+function startExt(title){       // 各ボタンの頭で呼ぶ：前の結果をためてから画面をまっさらに
+ extFlush(); extTitle = title; extLines = []; $('extOut').textContent='';
+ const n = extHistory.length;
+ if(n) toast(`開始：これまでの結果${n}件は保存済み（コピーに全部入ります）`);
+}
+function extHistText(){
+ extFlush();   // 最新ぶんも取り込む
+ if(!extHistory.length) return null;
+ const tm = t=>{ const d=new Date(t); return d.toLocaleString('ja-JP'); };
+ const body = extHistory.map(h=>`════════ ${h.title}（${tm(h.t)}）════════\n${h.text}`).join('\n\n');
+ return '【スズキ パレットSW 拡張探索結果（全'+extHistory.length+'件）】\n通信方式: '+protocol+'\n\n'+body+'\n\nこの結果を解析してください。';
+}
 const hx = (n,w=2)=>n.toString(16).toUpperCase().padStart(w,'0');
 function hexBytes(s){ const b=[]; for(let i=0;i+2<=s.length;i+=2) b.push(parseInt(s.slice(i,i+2),16)); return b; }
 function toHex(b){ return b.map(x=>hx(x)).join(' '); }
@@ -2802,21 +2824,21 @@ async function hunt(onlyAT){
 $('btnHunt').onclick = ()=>withPause(()=>hunt(false));
 $('btnCvtDtc').onclick = ()=>withPause(()=>hunt(true));
 $('btnAtScan').onclick = ()=>withPause(atScan);
-$('btnObdAll').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(obdAll); };
-$('btnCrank').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(crankTest); };
+$('btnObdAll').onclick = ()=>{ startExt('OBD全項目チェック'); withPause(obdAll); };
+$('btnCrank').onclick = ()=>{ startExt('始動テスト'); withPause(crankTest); };
 $('btnClear04').onclick = ()=>{
  const b = $('btnClear04');
  if(Date.now()-clear04Armed > 4000){ clear04Armed = Date.now(); b.textContent = '本当に消す？（記録と準備状態が消えます）もう一度押す'; setTimeout(()=>{ b.textContent='🧹 エンジンの故障コード消去（エンジン停止・キーONで）'; }, 4000); return; }
  clear04Armed = 0; b.textContent='🧹 エンジンの故障コード消去（エンジン停止・キーONで）';
- extLines = []; $('extOut').textContent=''; withPause(clear04);
+ startExt('故障コード消去'); withPause(clear04);
 };
-$('btnVault').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(vaultProbe); };
-$('btnSeed').onclick = ()=>{ allowKey = $('chkKey').checked; extLines = []; $('extOut').textContent=''; withPause(seedLab); };
-$('btnMap').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(memMap); };
-$('btnDump').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(memDump); };
+$('btnVault').onclick = ()=>{ startExt('奥の扉探し'); withPause(vaultProbe); };
+$('btnSeed').onclick = ()=>{ allowKey = $('chkKey').checked; startExt('鍵の研究所'); withPause(seedLab); };
+$('btnMap').onclick = ()=>{ startExt('メモリ地図'); withPause(memMap); };
+$('btnDump').onclick = ()=>{ startExt('メモリ吸い出し'); withPause(memDump); };
 $('btnDumpFile').onclick = dumpFile;
-$('btnSniff').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sniff); };
-$('btnSdt').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(sdtProbe); };
+$('btnSniff').onclick = ()=>{ startExt('診断機の通信を記録'); withPause(sniff); };
+$('btnSdt').onclick = ()=>{ startExt('SDT方式の窓口探し'); withPause(sdtProbe); };
 $('btnAtForget').onclick = ()=>{ atMap=[]; atHist.length=0; try{ localStorage.removeItem(ATMAPKEY); }catch(e){} toast('覚えた解読を消しました'); };
 $('btnCvtTest').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(cvtTest); };
 function cvtBtn(){ $('btnCvtMode').textContent = '⚙️ CVT診断モード：'+(cvtOn?'ON（走行中も毎回CVTを読む）':'OFF'); if(!cvtOn) $('cvtLive').textContent='CVT：モードOFF'; }
@@ -2889,8 +2911,9 @@ $('btnScan').onclick = ()=>{ try{ scanRange(); }catch(e){ toast(e.message); retu
 $('btnReread').onclick = ()=>withPause(reread);
 $('btnSend').onclick = ()=>withPause(sendCustom);
 $('btnAbort').onclick = ()=>{ abortExt = true; };
-$('btnExtClear').onclick = ()=>{ extLines = []; $('extOut').textContent=''; };
-$('btnExtCopy').onclick = ()=>copy(extLines.length ? '【スズキ パレットSW 拡張探索結果】\n通信方式: '+protocol+'\n\n'+extLines.join('\n')+'\n\nこの結果を解析してください。' : null);
+$('btnExtClear').onclick = ()=>{ extFlush(); extLines = []; $('extOut').textContent=''; toast(`画面を消去（保存済み${extHistory.length}件はコピーに残ります）`); };
+$('btnExtClear').ondblclick = ()=>{ extHistory=[]; extLines=[]; extTitle=''; $('extOut').textContent=''; try{ IDB.del('palette_obd2_exthist'); }catch(e){} toast('履歴も全部消しました'); };
+$('btnExtCopy').onclick = ()=>{ const t = extHistText(); if(!t){ toast('まだ結果がありません'); return; } copy(t); toast(`${extHistory.length}件の結果をすべてコピーしました`); };
 $('scanPreset').onchange = ()=>{ $('customRange').hidden = $('scanPreset').value!=='custom'; };
 $('btnConnect').onclick = ()=>{
  if(!navigator.bluetooth){ $('warn').hidden=false; toast('Bluefyで開いてください'); return; }
@@ -2944,6 +2967,7 @@ buildGrid();
 setExtButtons();
 loadLog();
 loadMeter();
+IDB.get('palette_obd2_exthist').then(h=>{ if(Array.isArray(h)&&h.length) extHistory=h; }).catch(()=>{});
 
 // ===== 傾きセンサー（iPhoneの加速度センサーを水平器として使う） =====
 const TILTKEY = 'palette_obd2_tilt';
