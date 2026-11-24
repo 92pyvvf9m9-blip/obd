@@ -211,6 +211,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <h2 class="sec">拡張：スズキ独自データ探索</h2>
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
+<button class="ext primary" id="btnEng" style="width:100%;margin:6px 0">🔬 エンジン拡張ライブ解読（21xxを空ぶかしで自動リバース・読むだけ・停車P/N・約60秒）</button>
 <button class="ext primary" id="btnRaw" style="width:100%;margin:6px 0">🧪 独自データの解読用記録（約2分・画面の指示どおりに操作）</button>
 <button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
@@ -535,6 +536,7 @@ async function bleTransport(known){
 function demoTransport(){
  const t0 = Date.now(); let hdr = '7DF', hon = false, echo = true, cra = '', unlocked = false, lastSeed = 0xA1B2C3D4;
  const h =(v,n=1)=>Math.max(0,Math.round(v)).toString(16).toUpperCase().padStart(n*2,'0').slice(-n*2);
+ const frEng =(p)=>{ const n=p.length/2, out=['7E810'+h(n)+p.slice(0,12)]; let k=1; for(let i=12;i<p.length;i+=14) out.push('7E82'+(k++%16).toString(16).toUpperCase()+p.slice(i,i+14).padEnd(14,'0')); return out.join('\r'); };
  return {
   name:'デモ',
   async write(s){
@@ -607,6 +609,8 @@ function demoTransport(){
     else if(c==='2101' && hdr==='7E0') r = fr('6101'+h(rpm/32)+'5A10');
     else if(c==='2105' && hdr==='7E1') r = fr('6105'+h(60+t/10)+'00');
     else if(c==='1A90' && hdr==='7E0') r = fr('5A90'+'4D4B3231');
+    else if(c==='2130' && hdr==='7E0'){ const b=new Array(40).fill(0), R=Math.round(rpm); b[4]=Math.min(255,Math.round(25+t/8)); b[8]=(R>>8)&255; b[9]=R&255; b[20]=Math.min(255,Math.round(40+t)); r = frEng('6130'+b.map(x=>h(x)).join('')); }
+    else if(c==='21FE' && hdr==='7E0'){ const b=new Array(90).fill(0), R=Math.round(rpm/40); for(let rec=0;rec<4;rec++){ const o=rec*20; b[o+3]=Math.min(255,R+rec*3); b[o+7]=0xFF; b[o+8]=0x68; b[o+10]=0x53; } r = frEng('61FE'+b.map(x=>h(x)).join('')); }
     else if(c.startsWith('21')||c.startsWith('1A')) r = fr('7F'+c.slice(0,2)+'31');
     else if(c.startsWith('22')) r = fr('7F2231');
     else r = 'NO DATA';
@@ -2150,6 +2154,75 @@ async function fullAuto(){
  }
  extOut('=== 全自動探索おわり：「探索結果コピー」で貼ってください。その後、エアコンON/OFFや空ぶかしの後に「再読取で比較」を押すと、どの値が何かを突き止められます ===');
 }
+// ===== 🔬 エンジン拡張ライブ解読（21xx 自動リバース・読むだけ） =====
+const ENGSIGS = [['rpm','エンジン回転','rpm'],['load','エンジン負荷','%'],['coolant','水温','℃'],['timing','点火時期','°'],['map','吸気圧','kPa']];
+let engIds = ['00','27','28','30','31','35','FE'];
+try{ const s = JSON.parse(localStorage.getItem('palette_obd2_engids')||'null'); if(Array.isArray(s)&&s.length) engIds=[...new Set([...engIds,...s])]; }catch(e){}
+async function readEngSig(){
+ const r={}; let b;
+ if(b=parsePid(await cmd('010C',1500),'0C')) r.rpm=((b[0]<<8)|b[1])/4;
+ if(b=parsePid(await cmd('0104',1500),'04')) r.load=b[0]*100/255;
+ if(b=parsePid(await cmd('0105',1500),'05')) r.coolant=b[0]-40;
+ if(b=parsePid(await cmd('010E',1500),'0E')) r.timing=b[0]/2-64;
+ if(b=parsePid(await cmd('010B',1500),'0B')) r.map=b[0];
+ return r;
+}
+async function engDecode(){
+ if(!needCAN()) return;
+ const T={tx:'7E0',rx:'7E8',name:'エンジン'};
+ const disc=[...found.keys()].filter(k=>k.startsWith('7E0|21')).map(k=>k.slice(6)); if(disc.length) engIds=[...new Set([...engIds,...disc])];
+ extOut('=== 🔬 エンジン拡張ライブ解読（21xx 自動リバース・読むだけ） ===');
+ await setTarget(T); await cmd('ATST20');
+ for(const [id,label] of [['90','車台/ECU番号'],['8B','ECM品番'],['8A','ECU品番']]){ if(abortExt) break; const d=await readId('1A',id,T); if(d) extOut('  '+label+'（1A '+id+'）：'+toAscii(d).replace(/[.\s]+$/,'')); }
+ extOut('読む番号：21 '+engIds.join(', '));
+ extOut('▼ これから約60秒、停車・P/Nでアクセルを数回あおってください。回転の動きからバイトの意味を割り出します。');
+ const N=60, samples=[];
+ for(let i=0;i<N;i++){
+  if(abortExt){ extOut('中止しました'); break; }
+  const sig=await readEngSig(), blk={};
+  for(const id of engIds){ if(abortExt) break; const d=await readId('21',id,T); if(d) blk[id]=d; }
+  samples.push({sig,blk});
+  if(i%3===0) $('scanProg').textContent='解読サンプル '+(i+1)+'/'+N+'（回転 '+(sig.rpm?Math.round(sig.rpm):'--')+'）';
+ }
+ $('scanProg').textContent='';
+ if(samples.length<20){ extOut('サンプルが足りません（接続と停車状態を確認してもう一度）'); return; }
+ const rv=samples.map(s=>s.sig.rpm).filter(x=>x!=null), rng=rv.length?Math.max(...rv)-Math.min(...rv):0;
+ extOut('サンプル '+samples.length+'件・回転の振り幅 '+Math.round(rng)+'rpm');
+ if(rng<300) extOut('※回転の振り幅が小さめ。もっとしっかりあおると精度が上がります。');
+ for(const id of engIds){
+  const have=samples.filter(s=>s.blk[id]); if(have.length<20){ extOut('■ 21 '+id+'：応答が少なく解読不可'); continue; }
+  const len=Math.min(...have.map(s=>s.blk[id].length)), found2=[], moving=[];
+  for(let pos=0;pos<len;pos++){
+   if(new Set(have.map(s=>s.blk[id][pos])).size<2) continue;
+   moving.push(pos); let best=null;
+   for(const w of [1,2]){
+    if(w===2 && pos+1>=len) continue;
+    const raw=have.map(s=> w===1 ? s.blk[id][pos] : (s.blk[id][pos]<<8)|s.blk[id][pos+1]);
+    if(new Set(raw).size<3) continue;
+    for(const [k,name,unit] of ENGSIGS){
+     const xs=[],ys=[]; have.forEach((s,i)=>{ const v=s.sig[k]; if(v!=null&&!isNaN(v)){ xs.push(raw[i]); ys.push(v); } });
+     if(xs.length<15||new Set(ys).size<3) continue;
+     const cr=corr(xs,ys); if(Math.abs(cr)<0.85) continue;
+     if(!best||Math.abs(cr)>Math.abs(best.r)){ const fb=fit(xs,ys); best={pos,w,name,unit,r:+cr.toFixed(2),a:fb.a,b:fb.b}; }
+    }
+   }
+   if(best) found2.push(best);
+  }
+  extOut('■ 21 '+id+'（'+len+'バイト・動いたバイト '+moving.length+'個）');
+  if(found2.length){
+   found2.sort((a,b)=>Math.abs(b.r)-Math.abs(a.r));
+   const used=new Set(), uniq=[];
+   for(const f of found2){ if(used.has(f.pos)||(f.w===2&&used.has(f.pos+1))) continue; used.add(f.pos); if(f.w===2) used.add(f.pos+1); uniq.push(f); }
+   for(const f of uniq.slice(0,12)) extOut('   ・'+f.pos+(f.w===2?'-'+(f.pos+1):'')+'バイト目 ＝ '+f.name+(f.r<0?'（逆向き）':'')+'｜一致度'+Math.abs(f.r)+'｜換算 '+f.a.toFixed(3)+'×生'+(f.b>=0?'+':'')+f.b.toFixed(1));
+  } else extOut('   （回転等と強く連動するバイトは見つからず）');
+  const first=have[0].blk[id], last=have[have.length-1].blk[id];
+  extOut('   生データ(最初, 16進):');
+  for(let o=0;o<len;o+=16) extOut('    '+hx(o,4)+': '+toHex(first.slice(o,o+16)));
+  const diff=[]; for(let p=0;p<Math.min(first.length,last.length);p++){ if(first[p]!==last[p]) diff.push(p+':'+hx(first[p])+'→'+hx(last[p])); }
+  if(diff.length) extOut('   最初→最後で変化: '+diff.join(' '));
+ }
+ extOut('=== 解読おわり：「探索結果コピー」で貼ってください。生データも入っているので、こちらで気筒別データの正体まで詰められます ===');
+}
 async function reread(){
  if(!found.size){ extOut('先に「データ探索」をしてください'); return; }
  extOut('--- 再読取（★＝前回から変化） ---');
@@ -2845,6 +2918,7 @@ function cvtBtn(){ $('btnCvtMode').textContent = '⚙️ CVT診断モード：'+
 $('btnCvtMode').onclick = ()=>{ cvtOn=!cvtOn; try{ localStorage.setItem('palette_obd2_cvt', cvtOn?'1':'0'); }catch(e){} cvtBtn(); toast(cvtOn?'CVT診断モードON':'CVT診断モードOFF'); };
 cvtBtn();
 $('btnAuto').onclick = ()=>withPause(fullAuto);
+$('btnEng').onclick = ()=>{ startExt('エンジン拡張ライブ解読'); withPause(engDecode); };
 $('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
 $('btnTrips').onclick = tripsOpen;
 function prvButtons(){
