@@ -212,6 +212,7 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
 <button class="ext primary" id="btnEng" style="width:100%;margin:6px 0">🔬 エンジン拡張ライブ解読（21xxを空ぶかしで自動リバース・読むだけ・停車P/N・約60秒）</button>
+<button class="ext primary" id="btnCyl" style="width:100%;margin:6px 0">🎯 気筒別ライブ（21 FEを4系統に分解＝3気筒＋基準・アイドルで気筒差・読むだけ・空ぶかし不要）</button>
 <button class="ext primary" id="btnRaw" style="width:100%;margin:6px 0">🧪 独自データの解読用記録（約2分・画面の指示どおりに操作）</button>
 <button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
@@ -2223,6 +2224,78 @@ async function engDecode(){
  }
  extOut('=== 解読おわり：「探索結果コピー」で貼ってください。生データも入っているので、こちらで気筒別データの正体まで詰められます ===');
 }
+// 🎯 気筒別ライブ（21 FE）：4系統×20バイト構造を気筒1〜4として表示。アイドリングのまま気筒差を見る。読むだけ。
+async function cylLive(){
+ if(!needCAN()) return;
+ const T={tx:'7E0',rx:'7E8',name:'エンジン'};
+ const REC=20, NB=4, SEP=new Set([7,8,13,16,17]);   // 21 FEは20バイト×4系統。K6Aは3気筒なので4つのうち1つは基準/平均の可能性
+ const idx=[0,1,2,3];
+ extOut('=== 🎯 気筒別ライブ（21 FE・4系統＝3気筒＋基準の可能性・読むだけ） ===');
+ extOut('※停車・P/Nのアイドリングで放置でOK（空ぶかし不要）。止めるときは「中止」。');
+ extOut('※この車は3気筒。4つの塊のうち「動きが一番小さい系統」が基準/平均、残り3つが気筒と判定します。');
+ await setTarget(T); await cmd('ATST20');
+ let d0=null; for(let k=0;k<4 && !d0;k++){ d0=await readId('21','FE',T); }
+ if(!d0){ extOut('21 FE が読めません（接続と停車状態を確認してもう一度）'); return; }
+ const okMark = d0.length>=NB*REC && idx.every(k=>d0[k*REC+7]===0xFF && d0[k*REC+8]===0x68);
+ if(!okMark){ extOut('21 FE の区切りが想定（FF 68）と違います。生データだけ出します：'); for(let o=0;o<d0.length;o+=16) extOut('  '+hx(o,4)+': '+toHex(d0.slice(o,o+16))); extOut('→ この生データを送ってください。構造を見直します。'); return; }
+ extOut('▼ 基準を取得中…（数秒そのまま）');
+ const cal=[]; for(let k=0;k<6 && !abortExt;k++){ const d=await readId('21','FE',T); if(d && d.length>=NB*REC) cal.push(d); }
+ if(cal.length<3){ extOut('基準が取れません（接続を確認）'); return; }
+ const varCols=[]; for(let i=0;i<REC;i++) if(!SEP.has(i)) varCols.push(i);
+ const balCols=[]; // ふだん系統どうしが近い列＝バランス計測値
+ for(const c of varCols){
+  let maxSpread=0;
+  for(const d of cal){ const v=idx.map(k=>d[k*REC+c]); maxSpread=Math.max(maxSpread, Math.max(...v)-Math.min(...v)); }
+  if(maxSpread<=10) balCols.push(c);
+ }
+ extOut('バランス判定に使う列：'+(balCols.length?balCols.map(c=>'['+c+']').join(' '):'（そろう列が無く、全変化列で判定）'));
+ const useCols = balCols.length? balCols : varCols;
+ const sum=varCols.map(()=>[0,0,0,0]), cnt=varCols.map(()=>[0,0,0,0]), outlier=[0,0,0,0], activity=[0,0,0,0];
+ let prev=null, n=0;
+ while(!abortExt && n<150){
+  const d=await readId('21','FE',T); if(!d || d.length<NB*REC) continue;
+  const recs=idx.map(k=>d.slice(k*REC,k*REC+REC));
+  varCols.forEach((c,ci)=>{ for(const k of idx){ sum[ci][k]+=recs[k][c]; cnt[ci][k]++; } });
+  // 系統ごとの「動きの大きさ」：前サンプルからの変化量（基準/平均の系統はあまり動かない）
+  if(prev) for(const k of idx){ let a=0; for(const c of useCols) a+=Math.abs(recs[k][c]-prev[k][c]); activity[k]+=a; }
+  prev=recs;
+  const dev=[0,0,0,0];
+  for(const c of useCols){ const v=idx.map(k=>recs[k][c]); const avg=(v[0]+v[1]+v[2]+v[3])/4; for(const k of idx) dev[k]+=Math.abs(v[k]-avg); }
+  let mi=0; for(const k of idx) if(dev[k]>dev[mi]) mi=k; outlier[mi]++;
+  n++;
+  if(n%3===0){ const tip=useCols.slice(0,2).map(c=>'['+c+'] '+idx.map(k=>hx(recs[k][c])).join('/')).join('  '); $('scanProg').textContent='気筒別ライブ '+n+'件  ズレ最大=系統'+(mi+1)+'  '+tip; }
+  if(n%30===0) extOut('― '+n+'件：はみ出し回数 系統1='+outlier[0]+' 系統2='+outlier[1]+' 系統3='+outlier[2]+' 系統4='+outlier[3]);
+ }
+ $('scanProg').textContent='';
+ extOut('サンプル '+n+'件 取得');
+ // 動きが一番小さい系統＝基準/平均の候補
+ let ref=0; for(const k of idx) if(activity[k]<activity[ref]) ref=k;
+ const cyl=idx.filter(k=>k!==ref);
+ extOut('■ 系統ごとの動きの大きさ：系統1='+Math.round(activity[0])+' 系統2='+Math.round(activity[1])+' 系統3='+Math.round(activity[2])+' 系統4='+Math.round(activity[3]));
+ extOut('   → 動きが最小の系統'+(ref+1)+' を「基準/平均」とみなす。気筒＝系統'+cyl.map(k=>k+1).join('・'));
+ extOut('■ 系統ごとの平均値（変化する列だけ・16進／左から 系統1 2 3 4）');
+ const colScore=[0,0,0,0];
+ varCols.forEach((c,ci)=>{
+  const av=idx.map(k=> cnt[ci][k]? sum[ci][k]/cnt[ci][k] : 0);
+  const cv=cyl.map(k=>av[k]), cmean=(cv[0]+cv[1]+cv[2])/3;   // 気筒3つの中で外れを見る
+  let mk=cyl[0]; for(const k of cyl) if(Math.abs(av[k]-cmean)>Math.abs(av[mk]-cmean)) mk=k;
+  const spread=Math.max(...cv)-Math.min(...cv); const isBal=useCols.includes(c);
+  if(isBal && spread>=4) colScore[mk]++;
+  extOut('   ['+String(c).padStart(2)+']'+(isBal?'*':' ')+' '+av.map((x,k)=>(k===ref?'(':'')+hx(Math.round(x))+(k===ref?')':'')).join(' ')+(spread>=4?'  → 気筒で外れ 系統'+(mk+1)+'（幅'+Math.round(spread)+'）':'  → そろってる'));
+ });
+ // 気筒3つの中での総合外れ
+ let worst=cyl[0]; for(const k of cyl) if(colScore[k]>colScore[worst]) worst=k;
+ const cylOut=cyl.map(k=>outlier[k]), cylTot=cylOut.reduce((a,b)=>a+b,0);
+ let instWorst=cyl[0]; for(const k of cyl) if(outlier[k]>outlier[instWorst]) instWorst=k;
+ extOut('■ 総合（カッコ( )＝基準/平均とみなした系統・* ＝バランス判定列）');
+ extOut('   気筒の中で外れた回数：'+cyl.map(k=>'系統'+(k+1)+'='+colScore[k]).join(' '));
+ if(colScore[worst]>0 && colScore[worst]>=Math.max(1,...cyl.filter(k=>k!==worst).map(k=>colScore[k]))+1)
+   extOut('   → 気筒の系統'+(worst+1)+' が他2気筒と違う挙動。要観察（圧縮・点火・噴射のどれか）。');
+ else extOut('   → 3気筒そろってる。気筒バランスは良好。');
+ extOut('※ 系統1〜4は21 FEの並び順。実際の気筒番号（1/2/3番）との対応は、1本ずつ失火させる等で後から確定できます（今は読むだけ）。');
+ extOut('=== 気筒別ライブおわり：「探索結果コピー」で貼ってください ===');
+}
+
 async function reread(){
  if(!found.size){ extOut('先に「データ探索」をしてください'); return; }
  extOut('--- 再読取（★＝前回から変化） ---');
@@ -2919,6 +2992,7 @@ $('btnCvtMode').onclick = ()=>{ cvtOn=!cvtOn; try{ localStorage.setItem('palette
 cvtBtn();
 $('btnAuto').onclick = ()=>withPause(fullAuto);
 $('btnEng').onclick = ()=>{ startExt('エンジン拡張ライブ解読'); withPause(engDecode); };
+$('btnCyl').onclick = ()=>{ startExt('気筒別ライブ（21 FE）'); withPause(cylLive); };
 $('btnRaw').onclick = ()=>{ extLines = []; $('extOut').textContent=''; withPause(rawRec); };
 $('btnTrips').onclick = tripsOpen;
 function prvButtons(){
