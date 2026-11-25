@@ -2233,14 +2233,15 @@ async function cylLive(){
  extOut('=== 🎯 気筒別ライブ（21 FE・4系統＝3気筒＋基準の可能性・読むだけ） ===');
  extOut('※停車・P/Nのアイドリングで放置でOK（空ぶかし不要）。止めるときは「中止」。');
  extOut('※この車は3気筒。4つの塊のうち「動きが一番小さい系統」が基準/平均、残り3つが気筒と判定します。');
- await setTarget(T); await cmd('ATST20');
- let d0=null; for(let k=0;k<4 && !d0;k++){ d0=await readId('21','FE',T); }
- if(!d0){ extOut('21 FE が読めません（接続と停車状態を確認してもう一度）'); return; }
- const okMark = d0.length>=NB*REC && idx.every(k=>d0[k*REC+7]===0xFF && d0[k*REC+8]===0x68);
- if(!okMark){ extOut('21 FE の区切りが想定（FF 68）と違います。生データだけ出します：'); for(let o=0;o<d0.length;o+=16) extOut('  '+hx(o,4)+': '+toHex(d0.slice(o,o+16))); extOut('→ この生データを送ってください。構造を見直します。'); return; }
+ await setTarget(T); await cmd('ATST60');   // 21 FEは92バイトの分割応答。タイムアウトを長めにして取りこぼしを防ぐ
+ const slp=ms=>new Promise(r=>setTimeout(r,ms));
+ let lastRaw=null;                           // 失敗時に中身を確認するため最後の応答を保持
+ const readFE=async()=>{ for(let a=0;a<6;a++){ if(abortExt) return null; const d=await readId('21','FE',T); if(d){ lastRaw=d; if(d.length>=NB*REC && idx.every(k=>d[k*REC+7]===0xFF && d[k*REC+8]===0x68)) return d; } await slp(150); } return null; };
+ let d0=await readFE();
+ if(!d0){ extOut('21 FE が安定して読めません（6回試しても92バイトの分割応答がそろいません）。'); if(lastRaw){ extOut('直近に返ってきた生データ（'+lastRaw.length+'バイト）：'); for(let o=0;o<lastRaw.length;o+=16) extOut('  '+hx(o,4)+': '+toHex(lastRaw.slice(o,o+16))); } extOut('→ この結果をそのまま送ってください。読み方を調整します。'); return; }
  extOut('▼ 基準を取得中…（数秒そのまま）');
- const cal=[]; for(let k=0;k<6 && !abortExt;k++){ const d=await readId('21','FE',T); if(d && d.length>=NB*REC) cal.push(d); }
- if(cal.length<3){ extOut('基準が取れません（接続を確認）'); return; }
+ const cal=[]; for(let k=0;k<6 && !abortExt;k++){ const d=await readFE(); if(d) cal.push(d); }
+ if(cal.length<3){ extOut('基準が安定しません（接続・停車状態を確認してもう一度）'); return; }
  const varCols=[]; for(let i=0;i<REC;i++) if(!SEP.has(i)) varCols.push(i);
  const balCols=[]; // ふだん系統どうしが近い列＝バランス計測値
  for(const c of varCols){
@@ -2251,9 +2252,9 @@ async function cylLive(){
  extOut('バランス判定に使う列：'+(balCols.length?balCols.map(c=>'['+c+']').join(' '):'（そろう列が無く、全変化列で判定）'));
  const useCols = balCols.length? balCols : varCols;
  const sum=varCols.map(()=>[0,0,0,0]), cnt=varCols.map(()=>[0,0,0,0]), outlier=[0,0,0,0], activity=[0,0,0,0];
- let prev=null, n=0;
+ let prev=null, n=0, fail=0;
  while(!abortExt && n<150){
-  const d=await readId('21','FE',T); if(!d || d.length<NB*REC) continue;
+  const d=await readFE(); if(!d){ if(++fail>12){ extOut('21 FEが連続で読めなくなったため中断（'+n+'件まで取得）。'); break; } continue; } fail=0;
   const recs=idx.map(k=>d.slice(k*REC,k*REC+REC));
   varCols.forEach((c,ci)=>{ for(const k of idx){ sum[ci][k]+=recs[k][c]; cnt[ci][k]++; } });
   // 系統ごとの「動きの大きさ」：前サンプルからの変化量（基準/平均の系統はあまり動かない）
@@ -2265,6 +2266,7 @@ async function cylLive(){
   n++;
   if(n%3===0){ const tip=useCols.slice(0,2).map(c=>'['+c+'] '+idx.map(k=>hx(recs[k][c])).join('/')).join('  '); $('scanProg').textContent='気筒別ライブ '+n+'件  ズレ最大=系統'+(mi+1)+'  '+tip; }
   if(n%30===0) extOut('― '+n+'件：はみ出し回数 系統1='+outlier[0]+' 系統2='+outlier[1]+' 系統3='+outlier[2]+' 系統4='+outlier[3]);
+  await slp(80);   // BLEの応答を取りこぼさないよう1呼吸おく
  }
  $('scanProg').textContent='';
  extOut('サンプル '+n+'件 取得');
