@@ -212,8 +212,8 @@ iPhoneの場合は App Store の無料ブラウザ「<b>Bluefy</b>」でこの�
 <p class="hint">読み取り専用です（消去・書き込み・作動テストは送れないようにしています）。停車中に使ってください。</p>
 <button class="ext primary" id="btnAuto" style="width:100%;margin:6px 0">🚀 全自動探索（エンジン＋ATの独自データを全部探す・約2分）</button>
 <button class="ext primary" id="btnEng" style="width:100%;margin:6px 0">🔬 エンジン拡張ライブ解読（21xxを空ぶかしで自動リバース・読むだけ・停車P/N・約60秒）</button>
-<button class="ext primary" id="btnCyl" style="width:100%;margin:6px 0">🎯 気筒別ライブ（21 FEを4系統に分解＝3気筒＋基準・アイドルで気筒差・読むだけ・空ぶかし不要）</button>
-<button class="ext primary" id="btnCylProbe" style="width:100%;margin:6px 0">🔎 21 FE 取り方テスト＋気筒別（空になるFEの復活手順を総当たり→そのまま解析・読むだけ）</button>
+<button class="ext primary" id="btnCyl" style="width:100%;margin:6px 0">🧩 気筒別スナップショット確認（21 FE＝コード発生時の気筒別記録。空なら健康・読むだけ）</button>
+<button class="ext primary" id="btnCylProbe" style="width:100%;margin:6px 0">🔎 21 FE 取り方テスト（空の原因切り分け・総当たり・読むだけ）</button>
 <button class="ext primary" id="btnRaw" style="width:100%;margin:6px 0">🧪 独自データの解読用記録（約2分・画面の指示どおりに操作）</button>
 <button class="ext primary" id="btnHunt" style="width:100%;margin:6px 0">🔍 故障履歴を徹底捜索（エンジン＋AT）</button>
 <div class="btns">
@@ -2228,75 +2228,39 @@ async function engDecode(){
 // 🎯 気筒別ライブ（21 FE）：4系統×20バイト構造を気筒1〜4として表示。アイドリングのまま気筒差を見る。読むだけ。
 async function cylLive(){
  if(!needCAN()) return;
- const T={tx:'7E0',rx:'7E8',name:'エンジン'};
- const REC=20, NB=4, SEP=new Set([7,8,13,16,17]);   // 21 FEは20バイト×4系統。K6Aは3気筒なので4つのうち1つは基準/平均の可能性
- const idx=[0,1,2,3];
- extOut('=== 🎯 気筒別ライブ（21 FE・4系統＝3気筒＋基準の可能性・読むだけ） ===');
- extOut('※停車・P/Nのアイドリングで放置でOK（空ぶかし不要）。止めるときは「中止」。');
- extOut('※この車は3気筒。4つの塊のうち「動きが一番小さい系統」が基準/平均、残り3つが気筒と判定します。');
- await setTarget(T); await cmd('ATST60');   // 21 FEは92バイトの分割応答。タイムアウトを長めにして取りこぼしを防ぐ
+ const T={tx:'7E0',rx:'7E8'}; const REC=20,NB=4,idx=[0,1,2,3], SEP=new Set([7,8,13,16,17]);
+ const full=d=>!!d && d.length>=NB*REC && idx.every(k=>d[k*REC+7]===0xFF && d[k*REC+8]===0x68);
  const slp=ms=>new Promise(r=>setTimeout(r,ms));
- let lastRaw=null;                           // 失敗時に中身を確認するため最後の応答を保持
- const readFE=async()=>{ for(let a=0;a<6;a++){ if(abortExt) return null; const d=await readId('21','FE',T); if(d){ lastRaw=d; if(d.length>=NB*REC && idx.every(k=>d[k*REC+7]===0xFF && d[k*REC+8]===0x68)) return d; } await slp(150); } return null; };
- let d0=await readFE();
- if(!d0){ extOut('21 FE が安定して読めません（6回試しても92バイトの分割応答がそろいません）。'); if(lastRaw){ extOut('直近に返ってきた生データ（'+lastRaw.length+'バイト）：'); for(let o=0;o<lastRaw.length;o+=16) extOut('  '+hx(o,4)+': '+toHex(lastRaw.slice(o,o+16))); } extOut('→ この結果をそのまま送ってください。読み方を調整します。'); return; }
- extOut('▼ 基準を取得中…（数秒そのまま）');
- const cal=[]; for(let k=0;k<6 && !abortExt;k++){ const d=await readFE(); if(d) cal.push(d); }
- if(cal.length<3){ extOut('基準が安定しません（接続・停車状態を確認してもう一度）'); return; }
+ extOut('=== 🧩 気筒別スナップショット（21 FE）確認・読むだけ ===');
+ extOut('21 FEは「故障コード発生時に残る気筒別フリーズフレーム」。中身があれば気筒別に展開、空なら記録なし＝健康。');
+ await setTarget(T); await cmd('ATST60');
+ let d=null, last=null;
+ for(let a=0;a<8 && !d && !abortExt;a++){ await readId('21','00',T); await readId('21','30',T); const r=await readId('21','FE',T); if(full(r)) d=r; else { if(r) last=r; await slp(200); } }
+ if(abortExt){ extOut('中止しました'); return; }
+ if(!d){
+  extOut('✅ 21 FE は空（返り '+(last?last.length:0)+'バイト＝中身なし）。');
+  extOut('＝現在エンジンに記録された気筒別フォルトは無し＝健康。');
+  extOut('（11/24に中身があったのは、圧縮測定でコイル3本を抜いて付いたP0351/52/53のスナップショット。コードを消したので空になりました。）');
+  extOut('→ 次に何か異常コードが出た時にこのボタンを押すと、原因の気筒が展開されます。');
+  extOut('=== おわり：「探索結果コピー」で貼ってください ===');
+  return;
+ }
+ extOut('⚠ 21 FE に気筒別スナップショットが入っています（＝何か記録あり）。展開します：');
+ const recs=idx.map(k=>d.slice(k*REC,k*REC+REC));
+ extOut('      '+Array.from({length:REC},(_,i)=>String(i).padStart(2)).join(' '));
+ for(const k of idx) extOut('系統'+(k+1)+': '+toHex(recs[k]));
  const varCols=[]; for(let i=0;i<REC;i++) if(!SEP.has(i)) varCols.push(i);
- const balCols=[]; // ふだん系統どうしが近い列＝バランス計測値
- for(const c of varCols){
-  let maxSpread=0;
-  for(const d of cal){ const v=idx.map(k=>d[k*REC+c]); maxSpread=Math.max(maxSpread, Math.max(...v)-Math.min(...v)); }
-  if(maxSpread<=10) balCols.push(c);
- }
- extOut('バランス判定に使う列：'+(balCols.length?balCols.map(c=>'['+c+']').join(' '):'（そろう列が無く、全変化列で判定）'));
- const useCols = balCols.length? balCols : varCols;
- const sum=varCols.map(()=>[0,0,0,0]), cnt=varCols.map(()=>[0,0,0,0]), outlier=[0,0,0,0], activity=[0,0,0,0];
- let prev=null, n=0, fail=0;
- while(!abortExt && n<150){
-  const d=await readFE(); if(!d){ if(++fail>12){ extOut('21 FEが連続で読めなくなったため中断（'+n+'件まで取得）。'); break; } continue; } fail=0;
-  const recs=idx.map(k=>d.slice(k*REC,k*REC+REC));
-  varCols.forEach((c,ci)=>{ for(const k of idx){ sum[ci][k]+=recs[k][c]; cnt[ci][k]++; } });
-  // 系統ごとの「動きの大きさ」：前サンプルからの変化量（基準/平均の系統はあまり動かない）
-  if(prev) for(const k of idx){ let a=0; for(const c of useCols) a+=Math.abs(recs[k][c]-prev[k][c]); activity[k]+=a; }
-  prev=recs;
-  const dev=[0,0,0,0];
-  for(const c of useCols){ const v=idx.map(k=>recs[k][c]); const avg=(v[0]+v[1]+v[2]+v[3])/4; for(const k of idx) dev[k]+=Math.abs(v[k]-avg); }
-  let mi=0; for(const k of idx) if(dev[k]>dev[mi]) mi=k; outlier[mi]++;
-  n++;
-  if(n%3===0){ const tip=useCols.slice(0,2).map(c=>'['+c+'] '+idx.map(k=>hx(recs[k][c])).join('/')).join('  '); $('scanProg').textContent='気筒別ライブ '+n+'件  ズレ最大=系統'+(mi+1)+'  '+tip; }
-  if(n%30===0) extOut('― '+n+'件：はみ出し回数 系統1='+outlier[0]+' 系統2='+outlier[1]+' 系統3='+outlier[2]+' 系統4='+outlier[3]);
-  await slp(80);   // BLEの応答を取りこぼさないよう1呼吸おく
- }
- $('scanProg').textContent='';
- extOut('サンプル '+n+'件 取得');
- // 動きが一番小さい系統＝基準/平均の候補
- let ref=0; for(const k of idx) if(activity[k]<activity[ref]) ref=k;
- const cyl=idx.filter(k=>k!==ref);
- extOut('■ 系統ごとの動きの大きさ：系統1='+Math.round(activity[0])+' 系統2='+Math.round(activity[1])+' 系統3='+Math.round(activity[2])+' 系統4='+Math.round(activity[3]));
- extOut('   → 動きが最小の系統'+(ref+1)+' を「基準/平均」とみなす。気筒＝系統'+cyl.map(k=>k+1).join('・'));
- extOut('■ 系統ごとの平均値（変化する列だけ・16進／左から 系統1 2 3 4）');
- const colScore=[0,0,0,0];
- varCols.forEach((c,ci)=>{
-  const av=idx.map(k=> cnt[ci][k]? sum[ci][k]/cnt[ci][k] : 0);
-  const cv=cyl.map(k=>av[k]), cmean=(cv[0]+cv[1]+cv[2])/3;   // 気筒3つの中で外れを見る
-  let mk=cyl[0]; for(const k of cyl) if(Math.abs(av[k]-cmean)>Math.abs(av[mk]-cmean)) mk=k;
-  const spread=Math.max(...cv)-Math.min(...cv); const isBal=useCols.includes(c);
-  if(isBal && spread>=4) colScore[mk]++;
-  extOut('   ['+String(c).padStart(2)+']'+(isBal?'*':' ')+' '+av.map((x,k)=>(k===ref?'(':'')+hx(Math.round(x))+(k===ref?')':'')).join(' ')+(spread>=4?'  → 気筒で外れ 系統'+(mk+1)+'（幅'+Math.round(spread)+'）':'  → そろってる'));
- });
- // 気筒3つの中での総合外れ
- let worst=cyl[0]; for(const k of cyl) if(colScore[k]>colScore[worst]) worst=k;
- const cylOut=cyl.map(k=>outlier[k]), cylTot=cylOut.reduce((a,b)=>a+b,0);
- let instWorst=cyl[0]; for(const k of cyl) if(outlier[k]>outlier[instWorst]) instWorst=k;
- extOut('■ 総合（カッコ( )＝基準/平均とみなした系統・* ＝バランス判定列）');
- extOut('   気筒の中で外れた回数：'+cyl.map(k=>'系統'+(k+1)+'='+colScore[k]).join(' '));
- if(colScore[worst]>0 && colScore[worst]>=Math.max(1,...cyl.filter(k=>k!==worst).map(k=>colScore[k]))+1)
-   extOut('   → 気筒の系統'+(worst+1)+' が他2気筒と違う挙動。要観察（圧縮・点火・噴射のどれか）。');
- else extOut('   → 3気筒そろってる。気筒バランスは良好。');
- extOut('※ 系統1〜4は21 FEの並び順。実際の気筒番号（1/2/3番）との対応は、1本ずつ失火させる等で後から確定できます（今は読むだけ）。');
- extOut('=== 気筒別ライブおわり：「探索結果コピー」で貼ってください ===');
+ const balCols=varCols.filter(c=>{ const v=idx.map(k=>recs[k][c]); return Math.max(...v)-Math.min(...v)<=10; });
+ const useCols=balCols.length?balCols:varCols;
+ extOut('■ バランス列（4系統がふだん近い列）：'+useCols.map(c=>'['+c+']').join(' '));
+ let worst=-1,worstDev=0;
+ for(const c of useCols){ const v=idx.map(k=>recs[k][c]); const avg=(v[0]+v[1]+v[2]+v[3])/4; for(const k of idx){ const dv=Math.abs(v[k]-avg); if(dv>worstDev){ worstDev=dv; worst=k; } } }
+ extOut('■ 列ごとの4系統値（16進）');
+ for(const c of useCols){ const v=idx.map(k=>recs[k][c]); const sp=Math.max(...v)-Math.min(...v); extOut('  ['+String(c).padStart(2)+'] '+v.map(x=>hx(x)).join(' ')+(sp>=4?' → ばらつき'+sp:'')); }
+ if(worst>=0 && worstDev>=4) extOut('→ 系統'+(worst+1)+' が一番外れています。記録された異常はこの気筒（系統）の可能性。');
+ else extOut('→ 4系統そろっています。');
+ extOut('※ このデータは「コード発生時点」の記録で、今の生の状態ではありません。系統と実際の気筒番号の対応は別途確認（今は読むだけ）。');
+ extOut('=== おわり：「探索結果コピー」で貼ってください ===');
 }
 
 // 🔎 21 FE 取り方テスト：21 FEは「一度読むと空になる」挙動。どの前処理で92バイト揃うか総当たりで調べ、使える手順が見つかればそのまま気筒別解析する。全部読むだけ。
